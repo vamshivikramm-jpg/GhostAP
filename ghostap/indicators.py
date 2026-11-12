@@ -380,18 +380,32 @@ class Analyzer:
     def aps(self) -> List[Tuple[str, str]]:
         return sorted(self._by_ap)
 
-    def _stats(self, ssid: str, bssid: str, until: Optional[float]) -> Optional[APStats]:
+    def _stats(self, ssid: str, bssid: str, until: Optional[float],
+               since: Optional[float] = None) -> Optional[APStats]:
         obs = self._by_ap.get((ssid, bssid), [])
-        if until is not None:
-            obs = [o for o in obs if o["ts"] <= until]
+        if until is not None or since is not None:
+            obs = [o for o in obs
+                   if (until is None or o["ts"] <= until) and (since is None or o["ts"] > since)]
         return APStats.from_obs(obs) if obs else None
 
-    def evaluate(self, ssid: str, bssid: str,
-                 until: Optional[float] = None) -> Optional[List[IndicatorResult]]:
-        """All indicator results for one AP using data up to `until`; None if not seen yet."""
-        ap = self._stats(ssid, bssid, until)
-        if ap is None:
+    def evaluate(self, ssid: str, bssid: str, until: Optional[float] = None,
+                 window: Optional[float] = None) -> Optional[List[IndicatorResult]]:
+        """All indicator results for one AP using data up to `until`.
+
+        With `window` (seconds, needs `until`), indicators look only at the AP's
+        frames in (until - window, until], so a single odd frame drops out again.
+        tsf_anomaly always uses the AP's full history, because "uptime when first
+        seen" is a property of the whole sighting. Returns None if the AP has no
+        frames in the range.
+        """
+        full = self._stats(ssid, bssid, until)
+        if full is None:
             return None
+        ap = full
+        if window is not None and until is not None:
+            ap = self._stats(ssid, bssid, until, since=until - window)
+            if ap is None:
+                return None
         if ssid == HIDDEN_SSID:
             return [IndicatorResult(n, 0, "hidden SSID - not compared with other networks")
                     for n in INDICATOR_NAMES]
@@ -406,6 +420,8 @@ class Analyzer:
         for fn in INDICATORS:
             if fn is rssi_jump:
                 results.append(fn(ap, base, siblings, baseline_end=self.baseline.end))
+            elif fn is tsf_anomaly:
+                results.append(fn(full, base, siblings))
             else:
                 results.append(fn(ap, base, siblings))
         return results

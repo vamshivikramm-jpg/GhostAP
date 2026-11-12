@@ -1,6 +1,7 @@
 """SQLite storage for raw observations and per-AP profiles."""
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from typing import List, Optional
@@ -41,7 +42,43 @@ CREATE TABLE IF NOT EXISTS ap_profiles (
     rssi_avg    REAL,
     PRIMARY KEY (ssid, bssid)
 );
+
+-- Phase 4: one alert per (detector, ssid, bssid); updated as it escalates.
+CREATE TABLE IF NOT EXISTS alerts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    detector      TEXT    NOT NULL,          -- 'ghostap' or 'baseline'
+    ssid          TEXT    NOT NULL,
+    bssid         TEXT    NOT NULL,
+    level         TEXT    NOT NULL,          -- highest level reached: MEDIUM / HIGH
+    score         REAL    NOT NULL,          -- peak smoothed risk score (0-100)
+    first_ts      REAL    NOT NULL,          -- first time the alert fired
+    high_ts       REAL,                      -- first time it reached HIGH
+    peak_ts       REAL,                      -- time of the peak score
+    last_ts       REAL,                      -- last time it was at MEDIUM or above
+    indicators    TEXT,                      -- JSON: [{name, value, weight, contribution, reason}]
+    reasons       TEXT,                      -- human-readable summary
+    benign_causes TEXT,                      -- JSON: [str]
+    UNIQUE (detector, ssid, bssid)
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_score ON alerts(score);
+
+-- Phase 4: risk score of every AP at every evaluation step.
+CREATE TABLE IF NOT EXISTS risk_timeline (
+    ts          REAL NOT NULL,
+    ssid        TEXT NOT NULL,
+    bssid       TEXT NOT NULL,
+    raw_score   REAL NOT NULL,
+    score       REAL NOT NULL,                -- smoothed
+    level       TEXT NOT NULL,
+    PRIMARY KEY (ts, ssid, bssid)
+);
 """
+
+ALERT_FIELDS = (
+    "detector", "ssid", "bssid", "level", "score", "first_ts", "high_ts",
+    "peak_ts", "last_ts", "indicators", "reasons", "benign_causes",
+)
+_JSON_ALERT_FIELDS = ("indicators", "benign_causes")
 
 _INSERT = "INSERT INTO observations ({}) VALUES ({})".format(
     ", ".join(OBS_FIELDS), ", ".join("?" for _ in OBS_FIELDS)
@@ -90,8 +127,8 @@ class Store:
 
     def reset(self) -> None:
         with self.conn:
-            self.conn.execute("DELETE FROM observations")
-            self.conn.execute("DELETE FROM ap_profiles")
+            for table in ("observations", "ap_profiles", "alerts", "risk_timeline"):
+                self.conn.execute("DELETE FROM {}".format(table))
 
     def profiles(self) -> List[dict]:
         rows = self.conn.execute(
@@ -107,6 +144,54 @@ class Store:
             sql += " WHERE ts <= ?"
             params = (until,)
         sql += " ORDER BY ts, id"
+        return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    # ---- Phase 4: alerts and risk timeline ------------------------------- #
+
+    def save_alerts(self, detector: str, alerts: List[dict]) -> None:
+        """Replace all alerts of one detector."""
+        sql = "INSERT INTO alerts ({}) VALUES ({})".format(
+            ", ".join(ALERT_FIELDS), ", ".join("?" for _ in ALERT_FIELDS))
+        with self.conn:
+            self.conn.execute("DELETE FROM alerts WHERE detector = ?", (detector,))
+            for a in alerts:
+                row = dict(a, detector=detector)
+                for f in _JSON_ALERT_FIELDS:
+                    row[f] = json.dumps(row.get(f) or [])
+                self.conn.execute(sql, tuple(row.get(f) for f in ALERT_FIELDS))
+
+    def alerts(self, detector: Optional[str] = None) -> List[dict]:
+        """Alerts ordered by risk (highest first)."""
+        sql = "SELECT * FROM alerts"
+        params: tuple = ()
+        if detector:
+            sql += " WHERE detector = ?"
+            params = (detector,)
+        sql += " ORDER BY score DESC, first_ts"
+        out = []
+        for r in self.conn.execute(sql, params).fetchall():
+            d = dict(r)
+            for f in _JSON_ALERT_FIELDS:
+                d[f] = json.loads(d[f]) if d[f] else []
+            out.append(d)
+        return out
+
+    def save_timeline(self, rows: List[dict]) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM risk_timeline")
+            self.conn.executemany(
+                "INSERT INTO risk_timeline (ts, ssid, bssid, raw_score, score, level) "
+                "VALUES (:ts, :ssid, :bssid, :raw_score, :score, :level)", rows)
+
+    def timeline(self, ssid: Optional[str] = None, bssid: Optional[str] = None) -> List[dict]:
+        sql, params = "SELECT * FROM risk_timeline WHERE 1=1", []
+        if ssid is not None:
+            sql += " AND ssid = ?"
+            params.append(ssid)
+        if bssid is not None:
+            sql += " AND bssid = ?"
+            params.append(bssid)
+        sql += " ORDER BY ts, ssid, bssid"
         return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
 
     def close(self) -> None:

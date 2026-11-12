@@ -1,0 +1,29 @@
+# GhostAP risk engine configuration (Phase 4)
+#
+# Risk score:  R = sum(w_i * x_i) / sum(w_i) * 100     (x_i = indicator value in [0, 1])
+
+# First N minutes of a capture are used to learn what "normal" looks like.
+baseline_minutes: 2
+
+# Indicator weights: higher = more evidence of an evil twin.
+weights:
+  security_downgrade: 3.0        # WPA2 -> open is the classic evil-twin give-away
+  new_bssid_oui: 2.0             # unknown radio vendor for a known network
+  tsf_anomaly: 2.0               # freshly booted device / TSF reset
+  bssid_conflict: 2.5            # cloned BSSID: hard to explain benignly
+  rssi_jump: 1.5                 # attacker usually sits close to the victim
+  channel_deviation: 1.0         # common for legit multi-AP networks too
+  beacon_interval_mismatch: 1.0  # different hardware / software AP
+
+# Risk levels on the smoothed score (0-100).
+thresholds:
+  medium: 30   # score >= 30 -> MEDIUM (an alert is raised)
+  high: 60     # score >= 60 -> HIGH
+
+# Temporal analysis.
+temporal:
+  step_seconds: 10      # evaluate every AP every 10 s of capture time
+  window_seconds: 10    # indicators use only the frames from the last 10 s
+  smoothing_steps: 3    # smoothed score = mean of the last 3 raw scores
+                        # (0 when the AP was not seen), so a one-off spike
+                        # contributes at most 1/3 of its value

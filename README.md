@@ -19,7 +19,7 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 | 1 | Collector + storage + synthetic test data | ✅ done |
 | 2 | Labelled lab dataset (real captures) | todo |
 | 3 | Indicators | ✅ done |
-| 4 | Risk engine | todo |
+| 4 | Risk engine | ✅ done |
 | 5 | Dashboard | todo |
 | 6 | Evaluation | todo |
 | 7 | Report & demo | todo |
@@ -31,6 +31,8 @@ ghostap/parser.py      frame -> observation dict
 ghostap/storage.py     SQLite store (observations + ap_profiles)
 ghostap/collector.py   CLI entry point (offline pcap or live sniff)
 ghostap/indicators.py  baseline learning + 7 Evil Twin indicators
+ghostap/risk.py        weighted risk score, temporal smoothing, alerts, baseline detector
+config.yaml            indicator weights, thresholds, timing
 tools/make_test_pcap.py synthetic capture with one evil twin
 tests/                 pytest suite
 data/                  captures and databases (gitignored)
@@ -87,6 +89,28 @@ like). Every AP then gets seven indicator values in [0, 1], each with a reason:
 
 Hidden SSIDs are not compared with each other. The baseline must not contain the
 attack itself, so in lab captures start the evil twin after the baseline window.
+
+## Risk engine (Phase 4)
+
+```bash
+python -m ghostap.risk --db data/ghostap.db --config config.yaml
+```
+
+- **Score:** `R = Σ wᵢxᵢ / Σ wᵢ × 100`, with the weights set in `config.yaml`.
+- **Temporal analysis:** every `step_seconds` (10 s) each AP is scored using only its
+  frames from the last `window_seconds`. The smoothed score is the mean of the last
+  `smoothing_steps` (3) raw scores, counting 0 while the AP is silent. So a single odd
+  beacon adds at most a third of its score and cannot raise an alert by itself.
+- **Levels** on the smoothed score: LOW < 30 ≤ MEDIUM < 60 ≤ HIGH. An alert is raised at MEDIUM.
+- **`alerts` table:** one row per AP, with the level, peak score, when it first fired,
+  when it reached HIGH, each indicator's value, weight, contribution and reason, and
+  possible benign causes. `risk_timeline` stores every AP's score at every step, for the dashboard.
+- **Baseline detector** (`detector='baseline'`): flags every BSSID whose SSID is
+  advertised by more than one BSSID. Phase 6 compares GhostAP against this.
+
+On the synthetic capture, GhostAP raises one alert: the evil twin, MEDIUM 20 s and
+HIGH 30 s after it appears, with a peak score of 73. The baseline detector flags all
+three `MVSR_WiFi` BSSIDs, so two of its three alerts are false positives.
 
 ## Run live (Linux only)
 
