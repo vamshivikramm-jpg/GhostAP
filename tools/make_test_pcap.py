@@ -34,13 +34,13 @@ APS = [
 ATTACK_START = 180
 
 
-def make_beacon(ssid, bssid, channel, wpa2, rssi, tsf, seq):
+def make_beacon(ssid, bssid, channel, wpa2, rssi, tsf, seq, beacon_interval=100):
     cap = "ESS+privacy" if wpa2 else "ESS"
     pkt = (
         RadioTap(present="dBm_AntSignal", dBm_AntSignal=rssi)
         / Dot11(type=0, subtype=8, addr1=BROADCAST, addr2=bssid, addr3=bssid,
                 SC=(seq & 0xFFF) << 4)
-        / Dot11Beacon(beacon_interval=100, timestamp=tsf, cap=cap)
+        / Dot11Beacon(beacon_interval=beacon_interval, timestamp=tsf, cap=cap)
         / Dot11Elt(ID="SSID", info=ssid.encode())
         / Dot11Elt(ID="DSset", info=bytes([channel]))
     )

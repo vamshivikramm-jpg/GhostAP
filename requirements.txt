@@ -5,3 +5,4 @@ flask
 plotly
 pytest
 pyyaml
+matplotlib

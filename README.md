@@ -21,7 +21,7 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 | 3 | Indicators | ✅ done |
 | 4 | Risk engine | ✅ done |
 | 5 | Dashboard | ✅ done |
-| 6 | Evaluation | todo |
+| 6 | Evaluation | ✅ done (synthetic set; rerun on Phase 2 captures) |
 | 7 | Report & demo | todo |
 
 ## Layout
@@ -37,6 +37,8 @@ ghostap/pipeline.py    background replay / live ingest + periodic rescoring
 ghostap/web.py         Flask API + dashboard server
 ghostap/static/        dashboard front end (HTML/CSS/JS, Plotly)
 tools/make_test_pcap.py synthetic capture with one evil twin
+tools/make_eval_set.py  10 labelled synthetic scenarios for evaluation
+ghostap/evaluate.py    Phase 6 evaluation (also: python evaluate.py)
 tests/                 pytest suite
 data/                  captures and databases (gitignored)
 ```
@@ -148,6 +150,40 @@ end escapes every value it displays.
 
 Each rescore re-analyses the whole database. That is fine for lab captures of a few
 minutes, but would need incremental scoring for captures running for hours.
+
+## Evaluation (Phase 6)
+
+```bash
+python tools/make_eval_set.py              # writes data/eval/<scenario>.pcap + .labels.json
+python evaluate.py --dataset data/eval --out results
+```
+
+GhostAP and the duplicate-SSID baseline run on every labelled capture. The unit of
+evaluation is one AP (SSID + BSSID) per capture. A detector flags an AP if it ever
+alerts on it. The evaluator reports precision, recall, F1, false-positive rate
+(FP / (FP + TN)) and detection latency (first alert − attack start). `results/` gets:
+
+- `summary.md`: overall table, per-scenario table, threshold sweep, caveats
+- `metrics.csv`, `per_scenario.csv`, `per_ap.csv`, `threshold_sweep.csv`
+- `metrics_comparison.png`, `latency.png`, `threshold_sweep.png`, `risk_timelines.png`
+
+Labels for `X.pcap` go in `X.labels.json` next to it:
+`{"aps": {"<bssid>": {"label": "evil_twin", "attack_start": <epoch>}, "<bssid>": {"label": "legit"}}}`.
+APs missing from the labels count as legit (`--unlabelled ignore` to skip them).
+Extra captures can be added with `--pcap X --labels Y`.
+
+Results on the **synthetic** set (5 attacks, 5 benign look-alikes; 39 APs in total):
+
+| Detector | Precision | Recall | F1 | FPR | Latency mean / max |
+|---|---|---|---|---|---|
+| GhostAP | 1.00 | 0.80 | 0.89 | 0.00 | 17.5 s / 30 s |
+| Baseline (duplicate SSID) | 0.17 | 1.00 | 0.29 | 0.74 | 0 s / 0 s |
+
+GhostAP misses `s04_stealth_wpa2_twin`, a WPA2 twin with a spoofed vendor OUI on the
+legit channel. Only its TSF gives it away, so its risk score of 20 stays under the
+threshold of 30. The hardest benign case, a new same-vendor AP that has just
+booted, scores 28. These synthetic numbers check the logic; the real results come
+from rerunning on the Phase 2 lab captures.
 
 ## Run live (Linux only)
 
