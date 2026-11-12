@@ -40,6 +40,7 @@ tools/make_test_pcap.py synthetic capture with one evil twin
 tools/make_eval_set.py  11 labelled synthetic scenarios for evaluation
 tools/label_capture.py  list APs in a real capture and write its labels file (Phase 2)
 tools/demo.py          guided end-to-end demo (opens the dashboard)
+tools/kali_monitor.sh  monitor mode on / off on Kali (check | start | stop)
 docs/                  project report, demo runbook, figures
 ghostap/evaluate.py    Phase 6 evaluation (also: python evaluate.py)
 tests/                 pytest suite
@@ -216,6 +217,11 @@ by us, so these synthetic numbers check the logic; the real results come from re
 on the Phase 2 lab captures.
 
 ## Run live (Linux only)
+
+**Step-by-step guide for Kali Linux: [docs/KALI_SETUP.md](docs/KALI_SETUP.md)**. It covers
+adapters, VMs, monitor mode, a lab evil twin, recording and labelling captures for
+Phase 2, and troubleshooting. `sudo tools/kali_monitor.sh start wlan1` puts an adapter
+into monitor mode, and `stop` gives it back.
 
 Requires root, `iw`, and a Wi-Fi adapter that supports monitor mode.
 
