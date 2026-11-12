@@ -176,6 +176,8 @@ class RiskEngine:
         if not self.an.obs:
             return []
         start, end = self.an.baseline.end, self.an.obs[-1]["ts"]
+        if end <= start:
+            return []                     # still learning the baseline
         out, t = [], start + self.step
         while t <= end:
             out.append(t)

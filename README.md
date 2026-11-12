@@ -20,7 +20,7 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 | 2 | Labelled lab dataset (real captures) | todo |
 | 3 | Indicators | ✅ done |
 | 4 | Risk engine | ✅ done |
-| 5 | Dashboard | todo |
+| 5 | Dashboard | ✅ done |
 | 6 | Evaluation | todo |
 | 7 | Report & demo | todo |
 
@@ -33,6 +33,9 @@ ghostap/collector.py   CLI entry point (offline pcap or live sniff)
 ghostap/indicators.py  baseline learning + 7 Evil Twin indicators
 ghostap/risk.py        weighted risk score, temporal smoothing, alerts, baseline detector
 config.yaml            indicator weights, thresholds, timing
+ghostap/pipeline.py    background replay / live ingest + periodic rescoring
+ghostap/web.py         Flask API + dashboard server
+ghostap/static/        dashboard front end (HTML/CSS/JS, Plotly)
 tools/make_test_pcap.py synthetic capture with one evil twin
 tests/                 pytest suite
 data/                  captures and databases (gitignored)
@@ -111,6 +114,40 @@ python -m ghostap.risk --db data/ghostap.db --config config.yaml
 On the synthetic capture, GhostAP raises one alert: the evil twin, MEDIUM 20 s and
 HIGH 30 s after it appears, with a peak score of 73. The baseline detector flags all
 three `MVSR_WiFi` BSSIDs, so two of its three alerts are false positives.
+
+## Dashboard (Phase 5)
+
+```bash
+# replay a pcap at 10x speed and watch alerts appear (fresh data/replay.db)
+python -m ghostap.web --pcap data/test_capture.pcap --speed 10
+
+# browse an existing database (after running the collector and risk engine)
+python -m ghostap.web --db data/ghostap.db
+
+# live capture (Linux, root, monitor mode), writes data/live.db
+sudo .venv/bin/python -m ghostap.web --iface wlan0
+```
+
+Open <http://127.0.0.1:8050>. Port 5000 is avoided because macOS uses it for AirPlay.
+
+- **Status bar and tiles:** mode (replay / live / database), capture clock, AP and
+  frame counts, HIGH and MEDIUM alerts, baseline-detector alerts, and baseline-learning progress.
+- **Alert list:** ranked by risk, with a tab to switch to the duplicate-SSID baseline detector.
+- **Alert detail:** each indicator's contribution (bar chart and table, with reasons), the
+  AP's raw and smoothed risk over time against the thresholds, and possible benign causes.
+- **Risk timeline:** smoothed score of every AP over capture time, with the baseline window
+  shaded and alert / escalation markers, plus an event list.
+- **AP table:** profile and current/peak risk for every AP.
+
+During a replay or live capture, a background thread re-runs the risk engine every
+2 s, and the page polls the API every 2 s. API: `/api/summary`, `/api/aps`,
+`/api/alerts?detector=ghostap|baseline|all`, `/api/alerts/<id>`, `/api/timeline`,
+`/api/events`. Plotly is served from the installed `plotly` package, so the dashboard
+works offline. SSIDs come from the air and can be chosen by an attacker, so the front
+end escapes every value it displays.
+
+Each rescore re-analyses the whole database. That is fine for lab captures of a few
+minutes, but would need incremental scoring for captures running for hours.
 
 ## Run live (Linux only)
 

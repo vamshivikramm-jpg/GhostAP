@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GhostAP Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/vendor/plotly.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>GhostAP</h1>
+      <span class="tagline">Passive Evil Twin detector</span>
+    </div>
+    <div class="status" id="status" aria-live="polite">connecting…</div>
+  </header>
+
+  <main>
+    <section class="tiles" aria-label="Summary">
+      <div class="tile"><span class="tile-label">Access points</span><span class="tile-value" id="t-aps">–</span></div>
+      <div class="tile"><span class="tile-label">Frames</span><span class="tile-value" id="t-frames">–</span></div>
+      <div class="tile"><span class="tile-label"><i class="lvl-icon HIGH"></i>HIGH alerts</span><span class="tile-value" id="t-high">–</span></div>
+      <div class="tile"><span class="tile-label"><i class="lvl-icon MEDIUM"></i>MEDIUM alerts</span><span class="tile-value" id="t-medium">–</span></div>
+      <div class="tile"><span class="tile-label">Baseline detector alerts</span><span class="tile-value" id="t-base">–</span></div>
+    </section>
+
+    <div class="banner" id="baseline-banner" hidden></div>
+
+    <section class="grid">
+      <div class="card alerts-card">
+        <div class="card-head">
+          <h2>Alerts <span class="muted">by risk</span></h2>
+          <div class="tabs" role="tablist">
+            <button role="tab" class="tab active" data-detector="ghostap" aria-selected="true">GhostAP</button>
+            <button role="tab" class="tab" data-detector="baseline" aria-selected="false">Baseline</button>
+          </div>
+        </div>
+        <p class="hint" id="detector-hint"></p>
+        <ul class="alert-list" id="alert-list"></ul>
+      </div>
+
+      <div class="card detail-card" id="detail">
+        <div class="empty">Select an alert to see why it fired.</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Risk timeline <span class="muted">smoothed score per access point</span></h2>
+      </div>
+      <div id="timeline-chart" class="chart chart-tall"></div>
+      <h3>Events</h3>
+      <ul class="events" id="events"></ul>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Access points</h2></div>
+      <div class="table-wrap">
+        <table class="ap-table">
+          <thead>
+            <tr>
+              <th>SSID</th><th>BSSID</th><th class="num">CH</th><th>Security</th>
+              <th class="num">RSSI avg</th><th class="num">Frames</th><th class="num">First seen</th>
+              <th class="num">Risk now</th><th class="num">Peak</th><th>Level</th>
+            </tr>
+          </thead>
+          <tbody id="ap-rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>Passive monitoring only: beacon and probe-response frames. Use only on networks you own or are authorised to monitor.</footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

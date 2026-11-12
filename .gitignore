@@ -8,3 +8,6 @@ __pycache__/
 data/*
 !data/.gitkeep
 results/
+
+# local editor / tool config
+.claude/

@@ -104,8 +104,10 @@ class Store:
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        self.conn = sqlite3.connect(path)
+        self.conn = sqlite3.connect(path, timeout=30)
         self.conn.row_factory = sqlite3.Row
+        # WAL lets the dashboard read while a replay / live capture writes.
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
         self._pending = 0
 
@@ -149,16 +151,37 @@ class Store:
     # ---- Phase 4: alerts and risk timeline ------------------------------- #
 
     def save_alerts(self, detector: str, alerts: List[dict]) -> None:
-        """Replace all alerts of one detector."""
-        sql = "INSERT INTO alerts ({}) VALUES ({})".format(
-            ", ".join(ALERT_FIELDS), ", ".join("?" for _ in ALERT_FIELDS))
+        """Make the stored alerts of one detector equal to `alerts`.
+
+        Existing rows are updated in place (upsert on detector+ssid+bssid), so an
+        alert keeps its id while it is rescored; alerts that disappeared are removed.
+        """
+        cols = ", ".join(ALERT_FIELDS)
+        updates = ", ".join("{0}=excluded.{0}".format(f) for f in ALERT_FIELDS
+                            if f not in ("detector", "ssid", "bssid"))
+        sql = ("INSERT INTO alerts ({}) VALUES ({}) "
+               "ON CONFLICT(detector, ssid, bssid) DO UPDATE SET {}").format(
+            cols, ", ".join("?" for _ in ALERT_FIELDS), updates)
+        keep = {(a["ssid"], a["bssid"]) for a in alerts}
         with self.conn:
-            self.conn.execute("DELETE FROM alerts WHERE detector = ?", (detector,))
             for a in alerts:
                 row = dict(a, detector=detector)
                 for f in _JSON_ALERT_FIELDS:
                     row[f] = json.dumps(row.get(f) or [])
                 self.conn.execute(sql, tuple(row.get(f) for f in ALERT_FIELDS))
+            for r in self.conn.execute(
+                    "SELECT id, ssid, bssid FROM alerts WHERE detector = ?", (detector,)).fetchall():
+                if (r["ssid"], r["bssid"]) not in keep:
+                    self.conn.execute("DELETE FROM alerts WHERE id = ?", (r["id"],))
+
+    def alert(self, alert_id: int) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+        if r is None:
+            return None
+        d = dict(r)
+        for f in _JSON_ALERT_FIELDS:
+            d[f] = json.loads(d[f]) if d[f] else []
+        return d
 
     def alerts(self, detector: Optional[str] = None) -> List[dict]:
         """Alerts ordered by risk (highest first)."""
