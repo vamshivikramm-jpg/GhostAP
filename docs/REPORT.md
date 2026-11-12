@@ -118,14 +118,9 @@ every campus and office. It is the comparison baseline in Section 7.
 
 ## 3. System design
 
-```
- monitor-mode NIC ──► collector ──► SQLite ──► indicators ──► risk engine ──► alerts ──► Flask API ──► dashboard
-   or pcap file      (Scapy, passive)  observations,   (baseline +      (weights,           (+ reasons,     (Plotly,
-                                       ap_profiles     7 indicators)     smoothing,          benign causes)   live polling)
-                                                                         levels)
-                                                                              │
-                                                                              └──► evaluate.py ──► metrics, charts
-```
+![System architecture](figures/architecture.png)
+
+*Figure 1: GhostAP architecture. The highlighted modules are the detection logic.*
 
 | Module | Responsibility |
 |---|---|
@@ -329,7 +324,7 @@ it (GhostAP: smoothed score ≥ 30; baseline: SSID advertised by more than one B
 
 ![Metric comparison](figures/metrics_comparison.png)
 
-*Figure 1: GhostAP vs. the duplicate-SSID baseline on the synthetic set.*
+*Figure 2: GhostAP vs. the duplicate-SSID baseline on the synthetic set.*
 
 The baseline finds every twin, but also raises an alarm for 25 of the 34 legitimate
 APs, because every legitimate multi-AP network looks like an attack to it. In practice,
@@ -353,7 +348,7 @@ of 5 twins.
 
 ![Risk timelines](figures/risk_timelines.png)
 
-*Figure 2: Smoothed GhostAP risk per scenario after the baseline. Blue = evil twin,
+*Figure 3: Smoothed GhostAP risk per scenario after the baseline. Blue = evil twin,
 grey = legitimate APs, dotted = attack start, dashed = MEDIUM / HIGH thresholds.*
 
 **Explaining an alert.** In s01, the twin's peak score of 73.1 breaks down as:
@@ -374,7 +369,7 @@ suspicious.
 
 ![Latency](figures/latency.png)
 
-*Figure 3: Seconds from attack start to the first alert.*
+*Figure 4: Seconds from attack start to the first alert.*
 
 GhostAP alerts 10–30 s after an attack starts. That delay is set by design: a 10 s
 scoring step and smoothing over 3 steps. The baseline's latency is 0 s, but only because
@@ -385,7 +380,7 @@ legitimate APs. That is not a meaningful detection.
 
 ![Threshold sweep](figures/threshold_sweep.png)
 
-*Figure 4: GhostAP precision, recall, F1 and false-positive rate as the alert threshold varies.*
+*Figure 5: GhostAP precision, recall, F1 and false-positive rate as the alert threshold varies.*
 
 - **Between 30 and 40:** precision stays at 1.00 and recall at 0.80.
 - **At 20:** the stealth twin is caught (recall 1.00), but the "new AP" scenario

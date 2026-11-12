@@ -22,7 +22,7 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 | 4 | Risk engine | ✅ done |
 | 5 | Dashboard | ✅ done |
 | 6 | Evaluation | ✅ done (synthetic set; rerun on Phase 2 captures) |
-| 7 | Report & demo | ✅ draft: [docs/REPORT.md](docs/REPORT.md), [docs/DEMO.md](docs/DEMO.md) |
+| 7 | Report & demo | ✅ draft: [docs/REPORT.md](docs/REPORT.md) (Word: docs/REPORT.docx), [docs/DEMO.md](docs/DEMO.md) |
 
 ## Layout
 
