@@ -1,0 +1,87 @@
+"""Turn a captured 802.11 management frame into a flat observation dict.
+
+Only beacon and probe-response frames are handled; everything else is ignored.
+"""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11ProbeResp, RadioTap
+
+HIDDEN_SSID = "<hidden>"
+
+# Strongest first. Scapy's crypto entries look like "WPA2/PSK", "WPA3/SAE", "OPN", "WEP".
+_SECURITY_RANK = ("WPA3", "WPA2", "WPA", "WEP", "OPN")
+
+
+def _rank(entry: str) -> int:
+    family = entry.split("/", 1)[0].upper()
+    try:
+        return _SECURITY_RANK.index(family)
+    except ValueError:
+        return len(_SECURITY_RANK)
+
+
+def strongest_security(crypto: Optional[set]) -> str:
+    """Pick the strongest entry of Scapy's crypto set (WPA3 > WPA2 > WPA > WEP > OPN)."""
+    if not crypto:
+        return "OPN"
+    return sorted(crypto, key=lambda e: (_rank(e), e))[0]
+
+
+def _clean_ssid(ssid: Any) -> str:
+    if isinstance(ssid, bytes):
+        ssid = ssid.decode("utf-8", errors="replace")
+    if ssid is None:
+        return HIDDEN_SSID
+    ssid = str(ssid)
+    # Hidden networks send an empty SSID or a run of NUL bytes.
+    if not ssid.strip("\x00").strip():
+        return HIDDEN_SSID
+    return ssid
+
+
+def _rssi(pkt) -> Optional[int]:
+    if not pkt.haslayer(RadioTap):
+        return None
+    val = getattr(pkt[RadioTap], "dBm_AntSignal", None)
+    return int(val) if val is not None else None
+
+
+def parse_frame(pkt) -> Optional[dict]:
+    """Return an observation dict for a beacon / probe response, else None."""
+    if pkt.haslayer(Dot11Beacon):
+        body = pkt[Dot11Beacon]
+        frame_type = "beacon"
+    elif pkt.haslayer(Dot11ProbeResp):
+        body = pkt[Dot11ProbeResp]
+        frame_type = "probe_resp"
+    else:
+        return None
+
+    dot11 = pkt[Dot11]
+    bssid = (dot11.addr3 or dot11.addr2 or "").lower()
+    if not bssid:
+        return None
+
+    try:
+        stats = body.network_stats()
+    except Exception:  # malformed information elements
+        stats = {}
+
+    channel = stats.get("channel")
+    sc = dot11.SC
+
+    return {
+        "ts": float(pkt.time),
+        "frame_type": frame_type,
+        "ssid": _clean_ssid(stats.get("ssid")),
+        "bssid": bssid,
+        "oui": bssid[:8],
+        "channel": int(channel) if channel is not None else None,
+        "security": strongest_security(stats.get("crypto")),
+        "rssi": _rssi(pkt),
+        "beacon_interval": int(body.beacon_interval) if body.beacon_interval is not None else None,
+        "tsf": int(body.timestamp) if body.timestamp is not None else None,
+        "seq": (int(sc) >> 4) if sc is not None else None,
+    }
