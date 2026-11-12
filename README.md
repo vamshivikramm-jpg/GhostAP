@@ -37,8 +37,10 @@ data/                  captures and databases (gitignored)
 
 ## Setup
 
+Requires Python 3.10+ (developed on 3.12; on macOS: `brew install python@3.12`).
+
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
