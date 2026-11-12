@@ -88,7 +88,7 @@ def test_dataset_discovery(eval_dir):
 
 def test_ghostap_beats_baseline_on_precision_and_fpr(eval_dir):
     pick = {"s01_classic_open_twin", "s04_stealth_wpa2_twin", "s06_benign_new_ap",
-            "s08_benign_enterprise"}
+            "s08_benign_enterprise", "s11_fingerprint_clone_twin"}
     pairs = [p for p in find_dataset(eval_dir) if p[0] in pick]
     rows, metrics, sweep, scen = evaluate(pairs, load_config(CONFIG))
     g, b = metrics
@@ -99,7 +99,9 @@ def test_ghostap_beats_baseline_on_precision_and_fpr(eval_dir):
     assert g["precision"] > b["precision"]
     by = {e["scenario"]: e for e in scen}
     assert by["s01_classic_open_twin"]["ghostap_TP"] == 1
-    assert by["s04_stealth_wpa2_twin"]["ghostap_FN"] == 1   # known limitation
+    assert by["s04_stealth_wpa2_twin"]["ghostap_TP"] == 1   # caught by the beacon fingerprint
+    assert by["s06_benign_new_ap"]["ghostap_FP"] == 0       # same hardware: no fingerprint hit
+    assert by["s11_fingerprint_clone_twin"]["ghostap_FN"] == 1   # known limitation
     assert 0 <= g["latency_max"] <= 60
 
 

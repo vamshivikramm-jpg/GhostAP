@@ -6,6 +6,7 @@
     security_downgrade: "Security downgrade",
     new_bssid_oui: "New BSSID / vendor",
     tsf_anomaly: "TSF / uptime",
+    ie_fingerprint: "Beacon fingerprint",
     bssid_conflict: "Cloned BSSID",
     rssi_jump: "Signal jump",
     channel_deviation: "Channel deviation",
@@ -97,7 +98,9 @@
       ? `capture t+${Math.round(s.capture_end - s.capture_start)}s` : "no frames yet";
     $("status").innerHTML =
       `<span class="pill"><i class="dot ${esc(st.state)}"></i>${esc(modeText)} · ${esc(st.state || "")}</span>` +
-      `<span class="mono">${esc(st.source || "")}</span><span>${esc(clock)}</span>`;
+      `<span class="mono">${esc(st.source || "")}</span><span>${esc(clock)}</span>` +
+      (st.hopping ? `<span>${esc(st.hopping)}</span>` : "") +
+      (st.save_pcap ? `<span>recording to <span class="mono">${esc(st.save_pcap)}</span></span>` : "");
 
     $("t-aps").textContent = s.aps;
     $("t-frames").textContent = Number(s.frames).toLocaleString();

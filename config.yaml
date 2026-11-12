@@ -10,6 +10,7 @@ weights:
   security_downgrade: 3.0        # WPA2 -> open is the classic evil-twin give-away
   new_bssid_oui: 2.0             # unknown radio vendor for a known network
   tsf_anomaly: 2.0               # freshly booted device / TSF reset
+  ie_fingerprint: 2.5            # beacon built by different hardware / AP software
   bssid_conflict: 2.5            # cloned BSSID: hard to explain benignly
   rssi_jump: 1.5                 # attacker usually sits close to the victim
   channel_deviation: 1.0         # common for legit multi-AP networks too
@@ -27,3 +28,10 @@ temporal:
   smoothing_steps: 3    # smoothed score = mean of the last 3 raw scores
                         # (0 when the AP was not seen), so a one-off spike
                         # contributes at most 1/3 of its value
+
+# BSSIDs the network administrator knows are legitimate (lower case). An
+# allow-listed BSSID first seen after the baseline is not treated as "new" and
+# its channel is not flagged. All other indicators still apply, so a cloned
+# allow-listed BSSID is still caught.
+known_bssids: []
+#  - a4:2b:b0:11:22:33

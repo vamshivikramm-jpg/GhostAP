@@ -5,7 +5,8 @@ Writes, for each scenario, into data/eval/ (or --out):
     <scenario>.pcap          300 s of beacons, 1 beacon / s / AP
     <scenario>.labels.json   ground truth: each BSSID -> legit / evil_twin
 
-Five scenarios contain an evil twin (from easy to deliberately hard). Five are
+Six scenarios contain an evil twin (from easy to deliberately hard, including an
+adaptive attacker that copies the real AP's beacon structure). Five are
 benign situations that look suspicious, to measure false positives: a new AP
 installed by IT, a reboot, a big enterprise network, a power change, a channel
 change. Every scenario has a 2-minute clean period at the start for the baseline.
@@ -35,9 +36,10 @@ ATTACK = 180
 
 
 def ap(ssid, bssid, ch, wpa2, rssi, tsf0, start=0, end=DURATION, label="legit",
-       bi=100, events=None):
+       bi=100, events=None, profile="enterprise"):
+    """profile = how the AP builds its beacons (see make_test_pcap.PROFILES)."""
     return dict(ssid=ssid, bssid=bssid, ch=ch, wpa2=wpa2, rssi=rssi, tsf0=tsf0,
-                start=start, end=end, label=label, bi=bi, events=events or [])
+                start=start, end=end, label=label, bi=bi, events=events or [], profile=profile)
 
 
 def office():
@@ -45,7 +47,7 @@ def office():
     return [
         ap("MVSR_WiFi", "a4:2b:b0:11:22:33", 6, True, -55, 9_000_000_000),
         ap("MVSR_WiFi", "a4:2b:b0:11:22:99", 1, True, -70, 7_500_000_000),
-        ap("Cafe_Guest", "f0:9f:c2:aa:bb:cc", 11, False, -75, 3_000_000_000),
+        ap("Cafe_Guest", "f0:9f:c2:aa:bb:cc", 11, False, -75, 3_000_000_000, profile="soho"),
     ]
 
 
@@ -55,26 +57,32 @@ SCENARIOS = {
         "Open evil twin of a WPA2 network: different vendor, new channel, strong "
         "signal, freshly booted.",
         office() + [ap("MVSR_WiFi", "00:c0:ca:de:ad:01", 11, False, -38, 1_000,
-                       start=ATTACK, label="evil_twin")]),
+                       start=ATTACK, label="evil_twin", profile="hostapd")]),
     "s02_spoofed_oui_twin": (
         "Open evil twin that spoofs the legit vendor OUI and sits on the legit "
         "channel with a similar signal.",
         office() + [ap("MVSR_WiFi", "a4:2b:b0:11:22:5a", 6, False, -50, 2_000,
-                       start=ATTACK, label="evil_twin")]),
+                       start=ATTACK, label="evil_twin", profile="hostapd")]),
     "s03_cloned_bssid_twin": (
         "Evil twin clones the exact BSSID of the main AP, open, on another channel.",
         office() + [ap("MVSR_WiFi", "a4:2b:b0:11:22:33", 11, False, -40, 3_000,
-                       start=ATTACK, label="evil_twin")]),
+                       start=ATTACK, label="evil_twin", profile="hostapd")]),
     "s04_stealth_wpa2_twin": (
-        "Hard case: attacker knows the PSK, so the twin is WPA2, spoofs the vendor "
-        "OUI, uses the legit channel and a normal signal. Only its TSF gives it away.",
+        "Hard case: attacker knows the PSK, so the twin is WPA2 (run from a phone "
+        "hotspot), spoofs the vendor OUI, uses the legit channel and a normal signal. "
+        "Only its TSF and its beacon structure give it away.",
         office() + [ap("MVSR_WiFi", "a4:2b:b0:11:22:77", 6, True, -57, 4_000,
-                       start=ATTACK, label="evil_twin")]),
+                       start=ATTACK, label="evil_twin", profile="phone")]),
     "s05_open_network_twin": (
         "Evil twin of an already-open hotspot: no security downgrade is possible; "
         "different vendor, channel, strong signal, fresh TSF.",
         office() + [ap("Cafe_Guest", "00:c0:ca:ca:fe:01", 1, False, -45, 5_000,
-                       start=ATTACK, label="evil_twin")]),
+                       start=ATTACK, label="evil_twin", profile="hostapd")]),
+    "s11_fingerprint_clone_twin": (
+        "Adaptive attacker: like s04, but the twin also copies the real AP's beacon "
+        "structure (same elements, rates and capabilities). Only its TSF differs.",
+        office() + [ap("MVSR_WiFi", "a4:2b:b0:11:22:7b", 6, True, -57, 4_000,
+                       start=ATTACK, label="evil_twin", profile="enterprise")]),
     # ---------------------------------------------------------------- benign
     "s06_benign_new_ap": (
         "IT switches on a new AP of the same vendor (WPA2) on a new channel; it has "
@@ -105,8 +113,39 @@ SCENARIOS = {
 }
 
 
+# Byte offsets in a beacon built by make_beacon (RadioTap with only dBm_AntSignal):
+#   [8] RSSI (int8) | [31:33] sequence control (LE) | [33:41] TSF timestamp (LE)
+_OFF_RSSI, _OFF_SC, _OFF_TSF = 8, 31, 33
+
+
+class _Template:
+    """Raw beacon bytes for one AP configuration; per-frame fields are patched in.
+
+    Building every frame with Scapy is slow, and only RSSI, sequence number and
+    TSF change from one beacon to the next.
+    """
+
+    def __init__(self):
+        self._cache = {}
+
+    def frame(self, spec, ch, rssi, tsf, seq):
+        key = (spec["ssid"], spec["bssid"], ch, spec["wpa2"], spec["bi"], spec["profile"])
+        raw = self._cache.get(key)
+        if raw is None:
+            raw = bytes(make_beacon(spec["ssid"], spec["bssid"], ch, spec["wpa2"], 0, 0, 0,
+                                    beacon_interval=spec["bi"], profile=spec["profile"]))
+            self._cache[key] = raw
+        b = bytearray(raw)
+        b[_OFF_RSSI] = rssi & 0xFF
+        b[_OFF_SC:_OFF_SC + 2] = ((seq & 0xFFF) << 4).to_bytes(2, "little")
+        b[_OFF_TSF:_OFF_TSF + 8] = int(tsf).to_bytes(8, "little")
+        return bytes(b)
+
+
 def render(aps, seed):
+    """Return [(timestamp, raw frame bytes)] in time order."""
     rnd = random.Random(seed)
+    tpl = _Template()
     frames = []
     for spec in aps:
         st = dict(ch=spec["ch"], rssi=spec["rssi"], boot_t=spec["start"],
@@ -129,12 +168,9 @@ def render(aps, seed):
             ts = BASE_TIME + t + rnd.uniform(0, 0.1)
             tsf = st["tsf_at_boot"] + int((t - st["boot_t"]) * 1_000_000)
             rssi = int(round(st["rssi"] + rnd.uniform(-3, 3)))
-            pkt = make_beacon(spec["ssid"], spec["bssid"], st["ch"], spec["wpa2"], rssi,
-                              tsf, st["seq"], beacon_interval=spec["bi"])
+            frames.append((ts, tpl.frame(spec, st["ch"], rssi, tsf, st["seq"])))
             st["seq"] = (st["seq"] + 1) % 4096
-            pkt.time = ts
-            frames.append(pkt)
-    frames.sort(key=lambda p: p.time)
+    frames.sort(key=lambda f: f[0])
     return frames
 
 
@@ -156,8 +192,10 @@ def generate(out_dir="data/eval"):
         frames = render(aps, seed=100 + i)
         pcap = os.path.join(out_dir, name + ".pcap")
         with PcapWriter(pcap, linktype=127, sync=False) as w:
-            for pkt in frames:
-                w.write(pkt)
+            w.write_header(None)          # write_packet() alone does not emit the file header
+            for ts, raw in frames:
+                sec = int(ts)
+                w.write_packet(raw, sec=sec, usec=int(round((ts - sec) * 1e6)))
         with open(os.path.join(out_dir, name + ".labels.json"), "w") as f:
             json.dump(labels_for(name, desc, aps), f, indent=2)
         written.append((name, len(frames)))

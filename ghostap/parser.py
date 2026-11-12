@@ -4,9 +4,10 @@ Only beacon and probe-response frames are handled; everything else is ignored.
 """
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Optional
 
-from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11ProbeResp, RadioTap
+from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeResp, RadioTap
 
 HIDDEN_SSID = "<hidden>"
 
@@ -49,6 +50,48 @@ def _rssi(pkt) -> Optional[int]:
     return int(val) if val is not None else None
 
 
+# Information elements whose *contents* identify the AP hardware / software.
+_FP_CONTENT_IDS = {1, 50, 127}          # supported rates, extended rates, extended capabilities
+_FP_PREFIX_IDS = {45: 3, 191: 4}        # HT capabilities (info + A-MPDU), VHT capabilities info
+_FP_SKIP_IDS = {48}                     # RSN: security is its own indicator
+_WPA_IE = b"\x00\x50\xf2\x01"           # Microsoft WPA vendor element (also security)
+# Capability bits that change at run time or with the security setting:
+# privacy (0x0010), short preamble (0x0020), short slot time (0x0400).
+_CAP_MASK = 0xFFFF & ~(0x0010 | 0x0020 | 0x0400)
+
+
+def beacon_fingerprint(body) -> Optional[str]:
+    """Hash of how a beacon is *built*, not what network it advertises.
+
+    Different AP models and AP software (vendor firmware, hostapd, phone hotspots)
+    order and fill their information elements differently, so a twin running on
+    other hardware usually has a different fingerprint from the real APs, even
+    when it copies the SSID, vendor OUI, channel and security.
+    """
+    try:
+        v = int(body.cap)
+        cap = ((v & 0xFF) << 8) | (v >> 8)   # Scapy's value is byte-swapped vs. IEEE 802.11
+        parts = ["cap={:04x}".format(cap & _CAP_MASK)]
+        elt = body.payload
+        while isinstance(elt, Dot11Elt):
+            eid = int(elt.ID)
+            raw = bytes(elt)[2:2 + int(elt.len or 0)]
+            if eid in _FP_SKIP_IDS or (eid == 221 and raw[:4] == _WPA_IE):
+                pass
+            elif eid in _FP_CONTENT_IDS:
+                parts.append("{}:{}".format(eid, raw.hex()))
+            elif eid in _FP_PREFIX_IDS:
+                parts.append("{}:{}".format(eid, raw[:_FP_PREFIX_IDS[eid]].hex()))
+            elif eid == 221:
+                parts.append("221:{}".format(raw[:4].hex()))   # vendor OUI + type
+            else:
+                parts.append(str(eid))                         # presence and order only
+            elt = elt.payload
+        return hashlib.sha1("|".join(parts).encode()).hexdigest()[:12]
+    except Exception:  # malformed elements: no fingerprint rather than a crash
+        return None
+
+
 def parse_frame(pkt) -> Optional[dict]:
     """Return an observation dict for a beacon / probe response, else None."""
     if pkt.haslayer(Dot11Beacon):
@@ -85,4 +128,5 @@ def parse_frame(pkt) -> Optional[dict]:
         "beacon_interval": int(body.beacon_interval) if body.beacon_interval is not None else None,
         "tsf": int(body.timestamp) if body.timestamp is not None else None,
         "seq": (int(sc) >> 4) if sc is not None else None,
+        "fingerprint": beacon_fingerprint(body),
     }

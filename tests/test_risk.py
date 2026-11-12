@@ -134,11 +134,11 @@ def test_cli_saves_alerts_and_timeline(db, capsys):
 # Temporal smoothing
 # --------------------------------------------------------------------------- #
 
-def obs(t, bssid="a4:2b:b0:00:00:01", ch=6, sec="WPA2/PSK", rssi=-60, tsf=None):
+def obs(t, bssid="a4:2b:b0:00:00:01", ch=6, sec="WPA2/PSK", rssi=-60, tsf=None, fp="fp-vendor"):
     return {"ts": 1000.0 + t, "frame_type": "beacon", "ssid": "Lab", "bssid": bssid,
             "oui": bssid[:8], "channel": ch, "security": sec, "rssi": rssi,
             "beacon_interval": 100, "tsf": tsf if tsf is not None else int(5e9 + t * 1e6),
-            "seq": t % 4096}
+            "seq": t % 4096, "fingerprint": fp}
 
 
 ROGUE = "00:c0:ca:00:00:66"
@@ -151,7 +151,7 @@ def engine_for(observations):
 
 def test_one_off_spike_does_not_alert():
     o = [obs(t) for t in range(300)]
-    o.append(obs(200.5, bssid=ROGUE, sec="OPN", rssi=-30, tsf=500))   # a single odd beacon
+    o.append(obs(200.5, bssid=ROGUE, sec="OPN", rssi=-30, tsf=500, fp="fp-hostapd"))  # one odd beacon
     rep = engine_for(o).run()
     rogue = [r for r in rep.timeline if r["bssid"] == ROGUE]
     assert max(r["raw_score"] for r in rogue) >= 60    # the spike itself is high...
@@ -160,8 +160,8 @@ def test_one_off_spike_does_not_alert():
 
 def test_persistent_rogue_alerts():
     o = [obs(t) for t in range(300)]
-    o += [obs(t + 0.5, bssid=ROGUE, sec="OPN", rssi=-30, tsf=int(500 + (t - 200) * 1e6))
-          for t in range(200, 300)]
+    o += [obs(t + 0.5, bssid=ROGUE, sec="OPN", rssi=-30, tsf=int(500 + (t - 200) * 1e6),
+              fp="fp-hostapd") for t in range(200, 300)]
     rep = engine_for(o).run()
     assert [a["bssid"] for a in rep.alerts] == [ROGUE]
     assert rep.alerts[0]["level"] == HIGH

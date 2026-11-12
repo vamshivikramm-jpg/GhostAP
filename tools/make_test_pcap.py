@@ -24,17 +24,46 @@ BROADCAST = "ff:ff:ff:ff:ff:ff"
 # RSN IE body: version 1, group CCMP, 1 pairwise CCMP, 1 AKM PSK, caps 0.
 RSN_WPA2_PSK = bytes.fromhex("0100000fac040100000fac040100000fac020000")
 
-# name, ssid, bssid, channel, wpa2, rssi_mean, rssi_jitter, tsf_start_us, start_s, label
+# name, ssid, bssid, channel, wpa2, rssi_mean, rssi_jitter, tsf_start_us, start_s, label, profile
 APS = [
-    ("a", "MVSR_WiFi",  "a4:2b:b0:11:22:33", 6,  True,  -55, 3, 9_000_000_000, 0,   "legit"),
-    ("b", "MVSR_WiFi",  "a4:2b:b0:11:22:99", 1,  True,  -70, 3, 7_500_000_000, 0,   "legit"),
-    ("c", "Cafe_Guest", "f0:9f:c2:aa:bb:cc", 11, False, -75, 3, 3_000_000_000, 0,   "legit"),
-    ("d", "MVSR_WiFi",  "00:c0:ca:de:ad:01", 11, False, -38, 3, 1_000,         180, "evil_twin"),
+    ("a", "MVSR_WiFi",  "a4:2b:b0:11:22:33", 6,  True,  -55, 3, 9_000_000_000, 0,   "legit", "enterprise"),
+    ("b", "MVSR_WiFi",  "a4:2b:b0:11:22:99", 1,  True,  -70, 3, 7_500_000_000, 0,   "legit", "enterprise"),
+    ("c", "Cafe_Guest", "f0:9f:c2:aa:bb:cc", 11, False, -75, 3, 3_000_000_000, 0,   "legit", "soho"),
+    ("d", "MVSR_WiFi",  "00:c0:ca:de:ad:01", 11, False, -38, 3, 1_000,         180, "evil_twin", "hostapd"),
 ]
 ATTACK_START = 180
 
+# --- How different AP software builds its beacons ----------------------------
+# Simplified, but modelled on real differences: element order, rate sets, HT
+# capabilities and vendor-specific elements. "rsn" marks where RSN goes for WPA2.
+_TIM = bytes.fromhex("00010000")
+_HT_INFO = bytes(22)
+_WMM = bytes.fromhex("0050f2020101800003a4000027a4000042435e0062322f00")
+PROFILES = {
+    # enterprise AP (controller-managed): country, HT, ext. capabilities, own vendor element
+    "enterprise": [(1, bytes.fromhex("8284 8b96 0c12 1824".replace(" ", ""))), (3, None), (5, _TIM),
+                   (7, b"IN \x01\x0d\x14"), (42, b"\x00"), "rsn",
+                   (50, bytes.fromhex("30486c60")), (45, bytes.fromhex("ad0117ff") + bytes(22)),
+                   (61, _HT_INFO), (127, bytes.fromhex("0000080000000040")),
+                   (221, bytes.fromhex("004096010104")), (221, _WMM)],
+    # home / small-office router
+    "soho": [(1, bytes.fromhex("82848b962430486c")), (3, None), (5, _TIM), (42, b"\x00"),
+             (50, bytes.fromhex("0c121860")), "rsn", (45, bytes.fromhex("ee1103ff") + bytes(22)),
+             (61, _HT_INFO), (221, _WMM), (221, bytes.fromhex("000c4304000000"))],
+    # Linux hostapd with a default 802.11g configuration (typical attack tooling)
+    "hostapd": [(1, bytes.fromhex("82848b96")), (3, None), (5, _TIM), (42, b"\x04"),
+                (50, bytes.fromhex("0c1218243048606c")), "rsn", (127, bytes.fromhex("0000000000000040")),
+                (221, _WMM)],
+    # phone hotspot
+    "phone": [(1, bytes.fromhex("82848b960c121824")), (3, None), (5, _TIM), (42, b"\x00"),
+              (50, bytes.fromhex("30486c60")), "rsn", (45, bytes.fromhex("2d0013ff") + bytes(22)),
+              (61, _HT_INFO), (127, bytes.fromhex("0400000000000040")), (221, _WMM),
+              (221, bytes.fromhex("001018020000100000"))],
+}
 
-def make_beacon(ssid, bssid, channel, wpa2, rssi, tsf, seq, beacon_interval=100):
+
+def make_beacon(ssid, bssid, channel, wpa2, rssi, tsf, seq, beacon_interval=100,
+                profile="enterprise"):
     cap = "ESS+privacy" if wpa2 else "ESS"
     pkt = (
         RadioTap(present="dBm_AntSignal", dBm_AntSignal=rssi)
@@ -42,10 +71,14 @@ def make_beacon(ssid, bssid, channel, wpa2, rssi, tsf, seq, beacon_interval=100)
                 SC=(seq & 0xFFF) << 4)
         / Dot11Beacon(beacon_interval=beacon_interval, timestamp=tsf, cap=cap)
         / Dot11Elt(ID="SSID", info=ssid.encode())
-        / Dot11Elt(ID="DSset", info=bytes([channel]))
     )
-    if wpa2:
-        pkt = pkt / Dot11Elt(ID=48, info=RSN_WPA2_PSK)
+    for item in PROFILES[profile]:
+        if item == "rsn":
+            if wpa2:
+                pkt = pkt / Dot11Elt(ID=48, info=RSN_WPA2_PSK)
+            continue
+        eid, info = item
+        pkt = pkt / Dot11Elt(ID=eid, info=bytes([channel]) if eid == 3 else info)
     return pkt
 
 
@@ -58,14 +91,14 @@ def generate(out_dir: str = "data", seed: int = 7):
     seqs = {ap[2]: random.randrange(4096) for ap in APS}
     frames = []
     for t in range(DURATION):
-        for (_, ssid, bssid, ch, wpa2, rssi_mean, jit, tsf0, start, _) in APS:
+        for (_, ssid, bssid, ch, wpa2, rssi_mean, jit, tsf0, start, _, profile) in APS:
             if t < start:
                 continue
             # small sub-second offset so APs don't beacon at the identical instant
             ts = BASE_TIME + t + random.uniform(0, 0.1)
             rssi = int(round(rssi_mean + random.uniform(-jit, jit)))
             tsf = tsf0 + int((t - start) * 1_000_000)
-            pkt = make_beacon(ssid, bssid, ch, wpa2, rssi, tsf, seqs[bssid])
+            pkt = make_beacon(ssid, bssid, ch, wpa2, rssi, tsf, seqs[bssid], profile=profile)
             seqs[bssid] = (seqs[bssid] + 1) % 4096
             pkt.time = ts
             frames.append(pkt)

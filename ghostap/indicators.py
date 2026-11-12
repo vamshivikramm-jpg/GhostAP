@@ -17,12 +17,13 @@ Run against a database:
 from __future__ import annotations
 
 import argparse
+import bisect
 import math
 import statistics
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .parser import HIDDEN_SSID, security_rank
 from .storage import Store
@@ -59,6 +60,8 @@ class APStats:
     rssi_mean: Optional[float]
     rssi_std: float
     beacon_interval: Optional[int]
+    fingerprints: Set[str] = field(default_factory=set)
+    tsf_resets: Optional[int] = None   # precomputed by Analyzer over the full history
 
     @classmethod
     def from_obs(cls, obs: Sequence[dict]) -> "APStats":
@@ -77,6 +80,8 @@ class APStats:
             rssi_mean=statistics.fmean(rssis) if rssis else None,
             rssi_std=statistics.pstdev(rssis) if len(rssis) > 1 else 0.0,
             beacon_interval=bis.most_common(1)[0][0] if bis else None,
+            fingerprints={o["fingerprint"] for o in obs
+                          if o.get("fingerprint") and o.get("frame_type", "beacon") == "beacon"},
         )
 
     @property
@@ -102,13 +107,18 @@ class SSIDBaseline:
     security: Optional[str] = None          # strongest security seen
     rssi_ref: Optional[float] = None        # mean RSSI of the strongest baseline AP
     beacon_interval: Optional[int] = None   # most common interval
+    fingerprints: Set[str] = field(default_factory=set)              # beacon structures seen
+    bssid_fingerprints: Dict[str, Set[str]] = field(default_factory=dict)
+    allowlist: Set[str] = field(default_factory=set)                 # admin-approved BSSIDs
 
 
 class Baseline:
     """Per-SSID baseline learned from the first `minutes` of the capture."""
 
-    def __init__(self, observations: Sequence[dict], minutes: float = DEFAULT_BASELINE_MINUTES):
+    def __init__(self, observations: Sequence[dict], minutes: float = DEFAULT_BASELINE_MINUTES,
+                 allowlist: Iterable[str] = ()):
         self.minutes = minutes
+        self.allowlist = {b.lower() for b in allowlist}
         self.start = observations[0]["ts"] if observations else 0.0
         self.end = self.start + minutes * 60
         self.ssids: Dict[str, SSIDBaseline] = {}
@@ -120,7 +130,7 @@ class Baseline:
             groups[o["ssid"]][o["bssid"]].append(o)
 
         for ssid, by_bssid in groups.items():
-            b = SSIDBaseline(ssid)
+            b = SSIDBaseline(ssid, allowlist=self.allowlist)
             securities: Set[str] = set()
             bis: Counter = Counter()
             for bssid, obs in by_bssid.items():
@@ -132,6 +142,8 @@ class Baseline:
                 if ap.rssi_mean is not None:
                     b.bssid_rssi[bssid] = (ap.rssi_mean, ap.rssi_std)
                 securities |= ap.securities
+                b.fingerprints |= ap.fingerprints
+                b.bssid_fingerprints[bssid] = set(ap.fingerprints)
                 if ap.beacon_interval:
                     bis[ap.beacon_interval] += len(obs)
             known = [s for s in securities if security_rank(s) <= 4]
@@ -190,6 +202,8 @@ def new_bssid_oui(ap: APStats, base: Optional[SSIDBaseline], siblings) -> Indica
         return IndicatorResult(name, 0, "no baseline for SSID '{}'".format(ap.ssid))
     if ap.bssid in base.bssids:
         return IndicatorResult(name, 0, "BSSID known from baseline")
+    if ap.bssid in base.allowlist:
+        return IndicatorResult(name, 0, "BSSID is on the administrator's allow-list")
     locally_admin = bool(int(ap.bssid[:2], 16) & 0x02)
     la_note = " (locally administered / randomised MAC)" if locally_admin else ""
     if ap.oui in base.ouis and not locally_admin:
@@ -219,6 +233,8 @@ def channel_deviation(ap: APStats, base: Optional[SSIDBaseline], siblings) -> In
                 "known BSSID moved from channel {} to {} (could be auto channel selection)".format(
                     _chans(base.bssid_channels[ap.bssid]), _chans(moved)))
         return IndicatorResult(name, 0, "same channel as baseline ({})".format(_chans(chans)))
+    if ap.bssid in base.allowlist:
+        return IndicatorResult(name, 0, "allow-listed BSSID on channel {}".format(_chans(chans)))
     unseen = chans - base.channels
     if unseen:
         return IndicatorResult(
@@ -270,7 +286,9 @@ def tsf_anomaly(ap: APStats, base: Optional[SSIDBaseline], siblings) -> Indicato
         return IndicatorResult(name, 0, "no TSF available")
 
     # 1) TSF reset: counter jumps backwards by more than 1 s.
-    resets = sum(1 for a, b in zip(tsf_obs, tsf_obs[1:]) if b["tsf"] < a["tsf"] - 1_000_000)
+    resets = ap.tsf_resets
+    if resets is None:
+        resets = sum(1 for a, b in zip(tsf_obs, tsf_obs[1:]) if b["tsf"] < a["tsf"] - 1_000_000)
     if resets:
         return IndicatorResult(
             name, 1.0, "TSF counter reset {} time(s) - AP rebooted or a second device is "
@@ -345,12 +363,38 @@ def beacon_interval_mismatch(ap: APStats, base: Optional[SSIDBaseline], siblings
             ap.beacon_interval, ap.ssid, base.beacon_interval))
 
 
+def ie_fingerprint(ap: APStats, base: Optional[SSIDBaseline], siblings) -> IndicatorResult:
+    """Beacon *structure* (element order, rates, capabilities, vendor elements) unlike
+    any AP of this SSID in the baseline, i.e. different hardware or AP software."""
+    name = "ie_fingerprint"
+    if base is None or not base.fingerprints:
+        return IndicatorResult(name, 0, "no beacon fingerprint baseline for SSID '{}'".format(ap.ssid))
+    fps = ap.fingerprints
+    if not fps:
+        return IndicatorResult(name, 0, "no beacon fingerprint (no beacons in range)")
+    known = base.bssid_fingerprints.get(ap.bssid)
+    if known is not None:
+        if not fps - known:
+            return IndicatorResult(name, 0, "beacon structure unchanged since the baseline")
+        return IndicatorResult(
+            name, 0.6, "beacon structure of this BSSID changed ({} new variant(s)): firmware or "
+                       "configuration change, or a second device using this BSSID".format(len(fps - known)))
+    if fps & base.fingerprints:
+        return IndicatorResult(
+            name, 0, "beacon structure matches existing AP(s) of '{}' (same model / software)".format(ap.ssid))
+    return IndicatorResult(
+        name, 1.0, "beacon structure {} matches none of the {} fingerprint(s) seen for '{}' in the "
+                   "baseline (different hardware or AP software)".format(
+                       ",".join(sorted(fps)), len(base.fingerprints), ap.ssid))
+
+
 INDICATORS: Tuple[Callable[..., IndicatorResult], ...] = (
     security_downgrade,
     new_bssid_oui,
     channel_deviation,
     rssi_jump,
     tsf_anomaly,
+    ie_fingerprint,
     bssid_conflict,
     beacon_interval_mismatch,
 )
@@ -362,31 +406,109 @@ INDICATOR_NAMES = tuple(f.__name__ for f in INDICATORS)
 # --------------------------------------------------------------------------- #
 
 class Analyzer:
-    """Evaluates every indicator for every AP, optionally up to a point in time."""
+    """Evaluates every indicator for every AP, optionally up to a point in time.
 
-    def __init__(self, observations: Sequence[dict],
-                 baseline_minutes: float = DEFAULT_BASELINE_MINUTES):
-        self.obs = sorted(observations, key=lambda o: o["ts"])
-        self.baseline = Baseline(self.obs, baseline_minutes)
+    Observations can be added incrementally (`add`), which is what the live
+    dashboard does. Per-AP time indexes make each windowed evaluation cost
+    O(log n + window) instead of a scan of the AP's whole history.
+    """
+
+    HEAD = 50   # frames used to estimate an AP's boot time / first uptime
+
+    def __init__(self, observations: Sequence[dict] = (),
+                 baseline_minutes: float = DEFAULT_BASELINE_MINUTES,
+                 allowlist: Iterable[str] = ()):
+        self.baseline_minutes = baseline_minutes
+        self.allowlist = {b.lower() for b in allowlist}
+        self._reset_state()
+        self.add(observations)
+
+    def _reset_state(self) -> None:
+        self.obs: List[dict] = []
         self._by_ap: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
-        for o in self.obs:
-            self._by_ap[(o["ssid"], o["bssid"])].append(o)
+        self._ts: Dict[Tuple[str, str], List[float]] = defaultdict(list)
+        self._resets: Dict[Tuple[str, str], List[float]] = defaultdict(list)
+        self._last_tsf: Dict[Tuple[str, str], int] = {}
+        self._by_ssid: Dict[str, Set[str]] = defaultdict(set)
+        self.baseline = Baseline([], self.baseline_minutes, self.allowlist)
+        self._baseline_frozen = False
 
     @classmethod
-    def from_db(cls, db_path: str, baseline_minutes: float = DEFAULT_BASELINE_MINUTES) -> "Analyzer":
+    def from_db(cls, db_path: str, baseline_minutes: float = DEFAULT_BASELINE_MINUTES,
+                allowlist: Iterable[str] = ()) -> "Analyzer":
         with Store(db_path) as store:
-            return cls(store.observations(), baseline_minutes)
+            return cls(store.observations(), baseline_minutes, allowlist)
+
+    def add(self, observations: Iterable[dict]) -> None:
+        """Append observations (any order within the batch)."""
+        new = sorted(observations, key=lambda o: o["ts"])
+        if not new:
+            return
+        if self.obs and new[0]["ts"] < self.obs[-1]["ts"]:
+            # rare: a frame older than what we have. Rebuild in time order.
+            merged = sorted(self.obs + new, key=lambda o: o["ts"])
+            self._reset_state()
+            new = merged
+        for o in new:
+            key = (o["ssid"], o["bssid"])
+            self.obs.append(o)
+            self._by_ap[key].append(o)
+            self._ts[key].append(o["ts"])
+            self._by_ssid[o["ssid"]].add(o["bssid"])
+            tsf = o.get("tsf")
+            if tsf is not None:
+                prev = self._last_tsf.get(key)
+                if prev is not None and tsf < prev - 1_000_000:
+                    self._resets[key].append(o["ts"])
+                self._last_tsf[key] = tsf
+        if not self._baseline_frozen:
+            self.baseline = Baseline(self.obs, self.baseline_minutes, self.allowlist)
+            # all frames of the baseline window are in once we are past its end
+            self._baseline_frozen = self.obs[-1]["ts"] >= self.baseline.end
 
     def aps(self) -> List[Tuple[str, str]]:
         return sorted(self._by_ap)
 
+    def first_seen(self, ssid: str, bssid: str) -> Optional[float]:
+        ts = self._ts.get((ssid, bssid))
+        return ts[0] if ts else None
+
+    def _slice(self, key, since: Optional[float], until: Optional[float]) -> List[dict]:
+        ts = self._ts.get(key)
+        if not ts:
+            return []
+        lo = bisect.bisect_right(ts, since) if since is not None else 0
+        hi = bisect.bisect_right(ts, until) if until is not None else len(ts)
+        return self._by_ap[key][lo:hi]
+
     def _stats(self, ssid: str, bssid: str, until: Optional[float],
                since: Optional[float] = None) -> Optional[APStats]:
-        obs = self._by_ap.get((ssid, bssid), [])
-        if until is not None or since is not None:
-            obs = [o for o in obs
-                   if (until is None or o["ts"] <= until) and (since is None or o["ts"] > since)]
+        obs = self._slice((ssid, bssid), since, until)
         return APStats.from_obs(obs) if obs else None
+
+    def _head(self, key, until: Optional[float]) -> Optional[APStats]:
+        """First frames of an AP (for 'uptime when first seen') + TSF resets up to `until`."""
+        ts = self._ts.get(key)
+        if not ts:
+            return None
+        hi = bisect.bisect_right(ts, until) if until is not None else len(ts)
+        if hi == 0:
+            return None
+        st = APStats.from_obs(self._by_ap[key][:min(self.HEAD, hi)])
+        resets = self._resets.get(key, [])
+        st.tsf_resets = bisect.bisect_right(resets, until) if until is not None else len(resets)
+        return st
+
+    def _sibling_at(self, key, moment: float, until: Optional[float]) -> Optional[APStats]:
+        """A sibling's frames around `moment`, to estimate its boot time at that point."""
+        ts = self._ts.get(key)
+        if not ts:
+            return None
+        limit = bisect.bisect_right(ts, until) if until is not None else len(ts)
+        hi = min(bisect.bisect_right(ts, moment), limit)
+        obs = self._by_ap[key]
+        chunk = obs[max(0, hi - self.HEAD):hi] if hi else obs[:min(self.HEAD, limit)]
+        return APStats.from_obs(chunk) if chunk else None
 
     def evaluate(self, ssid: str, bssid: str, until: Optional[float] = None,
                  window: Optional[float] = None) -> Optional[List[IndicatorResult]]:
@@ -394,25 +516,27 @@ class Analyzer:
 
         With `window` (seconds, needs `until`), indicators look only at the AP's
         frames in (until - window, until], so a single odd frame drops out again.
-        tsf_anomaly always uses the AP's full history, because "uptime when first
-        seen" is a property of the whole sighting. Returns None if the AP has no
-        frames in the range.
+        tsf_anomaly always uses the AP's first frames and its full reset history,
+        because "uptime when first seen" is a property of the whole sighting.
+        Returns None if the AP has no frames in the range.
         """
-        full = self._stats(ssid, bssid, until)
-        if full is None:
+        key = (ssid, bssid)
+        head = self._head(key, until)
+        if head is None:
             return None
-        ap = full
         if window is not None and until is not None:
             ap = self._stats(ssid, bssid, until, since=until - window)
-            if ap is None:
-                return None
+        else:
+            ap = self._stats(ssid, bssid, until)
+        if ap is None:
+            return None
         if ssid == HIDDEN_SSID:
             return [IndicatorResult(n, 0, "hidden SSID - not compared with other networks")
                     for n in INDICATOR_NAMES]
         siblings = {}
-        for (s, b) in self._by_ap:
-            if s == ssid and b != bssid:
-                st = self._stats(s, b, until)
+        for b in self._by_ssid.get(ssid, ()):
+            if b != bssid:
+                st = self._sibling_at((ssid, b), head.first_seen, until)
                 if st is not None:
                     siblings[b] = st
         base = self.baseline.get(ssid)
@@ -421,7 +545,7 @@ class Analyzer:
             if fn is rssi_jump:
                 results.append(fn(ap, base, siblings, baseline_end=self.baseline.end))
             elif fn is tsf_anomaly:
-                results.append(fn(full, base, siblings))
+                results.append(fn(head, base, siblings))
             else:
                 results.append(fn(ap, base, siblings))
         return results
@@ -445,6 +569,7 @@ SHORT = {
     "channel_deviation": "CH",
     "rssi_jump": "RSSI",
     "tsf_anomaly": "TSF",
+    "ie_fingerprint": "FP",
     "bssid_conflict": "CLONE",
     "beacon_interval_mismatch": "BI",
 }

@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
         "security_downgrade": 3.0,
         "new_bssid_oui": 2.0,
         "tsf_anomaly": 2.0,
+        "ie_fingerprint": 2.5,
         "bssid_conflict": 2.5,
         "rssi_jump": 1.5,
         "channel_deviation": 1.0,
@@ -46,6 +47,7 @@ DEFAULT_CONFIG = {
     },
     "thresholds": {"medium": 30.0, "high": 60.0},
     "temporal": {"step_seconds": 10.0, "window_seconds": 10.0, "smoothing_steps": 3},
+    "known_bssids": [],
 }
 
 # Innocent explanations an analyst should rule out before acting on an alert.
@@ -69,6 +71,10 @@ BENIGN_CAUSES = {
     "tsf_anomaly": [
         "The AP was rebooted, power-cycled or had a firmware update",
         "A brand-new AP was just switched on",
+    ],
+    "ie_fingerprint": [
+        "A new AP of a different model or vendor was added to the network",
+        "Firmware update or configuration change (e.g. 802.11r / WMM / band settings)",
     ],
     "bssid_conflict": [
         "Capture artefacts such as frames reordered by the driver",
@@ -165,36 +171,58 @@ class RiskEngine:
         self.n = int(t["smoothing_steps"])
         self.weights = self.cfg["weights"]
         self.thresholds = self.cfg["thresholds"]
+        # state kept between run() calls, so the live pipeline only scores new steps
+        self._history: Dict[Tuple[str, str], deque] = {}
+        self._alerts: Dict[Tuple[str, str], dict] = {}
+        self._next_grid: Optional[float] = None   # next regular evaluation time
+        self._last_t: Optional[float] = None      # last evaluated time (grid or final)
 
     @classmethod
     def from_db(cls, db_path: str, config: Optional[dict] = None) -> "RiskEngine":
         cfg = config or load_config(None)
-        return cls(Analyzer.from_db(db_path, cfg["baseline_minutes"]), cfg)
+        an = Analyzer.from_db(db_path, cfg["baseline_minutes"], cfg.get("known_bssids") or ())
+        return cls(an, cfg)
 
-    def steps(self) -> List[float]:
-        """Evaluation times: every `step` seconds from the end of the baseline."""
+    def _schedule(self, final: bool) -> Tuple[List[float], Optional[float]]:
+        """(regular steps not yet evaluated, optional final partial step)."""
         if not self.an.obs:
-            return []
+            return [], None
         start, end = self.an.baseline.end, self.an.obs[-1]["ts"]
         if end <= start:
-            return []                     # still learning the baseline
-        out, t = [], start + self.step
+            return [], None               # still learning the baseline
+        t = self._next_grid if self._next_grid is not None else start + self.step
+        grid = []
         while t <= end:
-            out.append(t)
+            grid.append(t)
             t += self.step
-        if not out or out[-1] < end:
-            out.append(end)
-        return out
+        last = grid[-1] if grid else self._last_t
+        partial = end if final and (last is None or end > last) else None
+        return grid, partial
 
-    def run(self) -> RiskReport:
+    def steps(self, final: bool = True) -> List[float]:
+        """Evaluation times still to run: every `step` s after the baseline (+ the end)."""
+        grid, partial = self._schedule(final)
+        return grid + ([partial] if partial is not None else [])
+
+    def run(self, final: bool = True) -> RiskReport:
+        """Score every step not scored by an earlier call.
+
+        Returns the new timeline rows and all alerts so far. `final=False` skips the
+        partial step at the end of the data (the live pipeline uses this while frames
+        are still arriving, so that step is scored once it is complete).
+        """
         report = RiskReport()
-        history: Dict[Tuple[str, str], deque] = {}
-        alerts: Dict[Tuple[str, str], dict] = {}
-        first_seen = {ap: obs[0]["ts"] for ap, obs in self.an._by_ap.items()}
+        history, alerts = self._history, self._alerts
+        grid, partial = self._schedule(final)
+        if grid:
+            self._next_grid = grid[-1] + self.step
+        elif self._next_grid is None and self.an.obs and self.an.obs[-1]["ts"] > self.an.baseline.end:
+            self._next_grid = self.an.baseline.end + self.step
 
-        for t in self.steps():
+        for t in grid + ([partial] if partial is not None else []):
+            self._last_t = t
             for key in self.an.aps():
-                if first_seen[key] > t:
+                if self.an.first_seen(*key) > t:
                     continue                      # not on air yet
                 res = self.an.evaluate(*key, until=t, window=self.window)
                 if res is None:
@@ -234,35 +262,48 @@ class RiskEngine:
 # Baseline detector: flag every BSSID whose SSID is advertised by >1 BSSID
 # --------------------------------------------------------------------------- #
 
-def duplicate_ssid_detector(observations: Iterable[dict]) -> List[dict]:
-    seen: Dict[str, List[str]] = defaultdict(list)
-    first: Dict[Tuple[str, str], float] = {}
-    last: Dict[Tuple[str, str], float] = {}
-    for o in sorted(observations, key=lambda o: o["ts"]):
-        ssid, bssid = o["ssid"], o["bssid"]
-        if ssid == HIDDEN_SSID:
-            continue
-        if bssid not in seen[ssid]:
-            seen[ssid].append(bssid)
-        last[(ssid, bssid)] = o["ts"]
-        if len(seen[ssid]) > 1:
-            for b in seen[ssid]:
-                first.setdefault((ssid, b), o["ts"])
+class DuplicateSSIDDetector:
+    """Incremental version: feed observations in time order with update()."""
 
-    alerts = []
-    for (ssid, bssid), ts in first.items():
-        others = [b for b in seen[ssid] if b != bssid]
-        reason = "SSID '{}' is advertised by {} BSSIDs (also {})".format(
-            ssid, len(seen[ssid]), ", ".join(others))
-        alerts.append({
-            "ssid": ssid, "bssid": bssid, "level": HIGH, "score": 100.0,
-            "first_ts": ts, "high_ts": ts, "peak_ts": ts, "last_ts": last[(ssid, bssid)],
-            "indicators": [{"name": "duplicate_ssid", "value": 1.0, "weight": 1.0,
-                            "contribution": 100.0, "reason": reason}],
-            "reasons": reason,
-            "benign_causes": list(BENIGN_CAUSES["duplicate_ssid"]),
-        })
-    return sorted(alerts, key=lambda a: (a["first_ts"], a["ssid"], a["bssid"]))
+    def __init__(self):
+        self.seen: Dict[str, List[str]] = defaultdict(list)
+        self.first: Dict[Tuple[str, str], float] = {}
+        self.last: Dict[Tuple[str, str], float] = {}
+
+    def update(self, observations: Iterable[dict]) -> None:
+        for o in sorted(observations, key=lambda o: o["ts"]):
+            ssid, bssid = o["ssid"], o["bssid"]
+            if ssid == HIDDEN_SSID:
+                continue
+            if bssid not in self.seen[ssid]:
+                self.seen[ssid].append(bssid)
+            self.last[(ssid, bssid)] = o["ts"]
+            if len(self.seen[ssid]) > 1:
+                for b in self.seen[ssid]:
+                    self.first.setdefault((ssid, b), o["ts"])
+
+    def alerts(self) -> List[dict]:
+        out = []
+        for (ssid, bssid), ts in self.first.items():
+            others = [b for b in self.seen[ssid] if b != bssid]
+            reason = "SSID '{}' is advertised by {} BSSIDs (also {})".format(
+                ssid, len(self.seen[ssid]), ", ".join(others))
+            out.append({
+                "ssid": ssid, "bssid": bssid, "level": HIGH, "score": 100.0,
+                "first_ts": ts, "high_ts": ts, "peak_ts": ts, "last_ts": self.last[(ssid, bssid)],
+                "indicators": [{"name": "duplicate_ssid", "value": 1.0, "weight": 1.0,
+                                "contribution": 100.0, "reason": reason}],
+                "reasons": reason,
+                "benign_causes": list(BENIGN_CAUSES["duplicate_ssid"]),
+            })
+        return sorted(out, key=lambda a: (a["first_ts"], a["ssid"], a["bssid"]))
+
+
+def duplicate_ssid_detector(observations: Iterable[dict]) -> List[dict]:
+    """Baseline detector: flag every BSSID whose SSID is advertised by more than one BSSID."""
+    det = DuplicateSSIDDetector()
+    det.update(observations)
+    return det.alerts()
 
 
 # --------------------------------------------------------------------------- #
@@ -293,7 +334,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     rel = lambda ts: "-" if ts is None else "t+{:.0f}s".format(ts - t0)  # noqa: E731
     th = cfg["thresholds"]
     print("[+] {} evaluation steps every {:g}s after a {:g}-min baseline; "
-          "MEDIUM >= {:g}, HIGH >= {:g}\n".format(len(engine.steps()), engine.step,
+          "MEDIUM >= {:g}, HIGH >= {:g}\n".format(len({r["ts"] for r in report.timeline}), engine.step,
                                                   cfg["baseline_minutes"], th["medium"], th["high"]))
 
     print("GhostAP alerts ({}):".format(len(report.alerts)))

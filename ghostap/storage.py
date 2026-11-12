@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 OBS_FIELDS = (
     "ts", "frame_type", "ssid", "bssid", "oui", "channel",
-    "security", "rssi", "beacon_interval", "tsf", "seq",
+    "security", "rssi", "beacon_interval", "tsf", "seq", "fingerprint",
 )
 
 SCHEMA = """
@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS observations (
     rssi            INTEGER,
     beacon_interval INTEGER,
     tsf             INTEGER,
-    seq             INTEGER
+    seq             INTEGER,
+    fingerprint     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_obs_ssid  ON observations(ssid);
 CREATE INDEX IF NOT EXISTS idx_obs_bssid ON observations(bssid);
@@ -109,7 +110,15 @@ class Store:
         # WAL lets the dashboard read while a replay / live capture writes.
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self._pending = 0
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was created (older GhostAP versions)."""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(observations)")}
+        if "fingerprint" not in cols:
+            self.conn.execute("ALTER TABLE observations ADD COLUMN fingerprint TEXT")
+            self.conn.commit()
 
     def add(self, obs: dict) -> None:
         self.conn.execute(_INSERT, tuple(obs.get(f) for f in OBS_FIELDS))
@@ -147,6 +156,20 @@ class Store:
             params = (until,)
         sql += " ORDER BY ts, id"
         return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    def observations_after(self, last_id: int = 0) -> Tuple[List[dict], int]:
+        """Observations with id > last_id (arrival order) and the new highest id."""
+        rows = self.conn.execute(
+            "SELECT id, {} FROM observations WHERE id > ? ORDER BY id".format(", ".join(OBS_FIELDS)),
+            (last_id,)).fetchall()
+        if not rows:
+            return [], last_id
+        out = []
+        for r in rows:
+            d = dict(r)
+            d.pop("id")
+            out.append(d)
+        return out, rows[-1]["id"]
 
     # ---- Phase 4: alerts and risk timeline ------------------------------- #
 
@@ -204,6 +227,13 @@ class Store:
             self.conn.execute("DELETE FROM risk_timeline")
             self.conn.executemany(
                 "INSERT INTO risk_timeline (ts, ssid, bssid, raw_score, score, level) "
+                "VALUES (:ts, :ssid, :bssid, :raw_score, :score, :level)", rows)
+
+    def append_timeline(self, rows: List[dict]) -> None:
+        """Add (or overwrite) risk-timeline rows without touching older ones."""
+        with self.conn:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO risk_timeline (ts, ssid, bssid, raw_score, score, level) "
                 "VALUES (:ts, :ssid, :bssid, :raw_score, :score, :level)", rows)
 
     def timeline(self, ssid: Optional[str] = None, bssid: Optional[str] = None) -> List[dict]:

@@ -90,7 +90,7 @@ def run_capture(name: str, pcap: str, labels_path: str, cfg: dict,
             collect_pcap(pcap, store)
             obs = store.observations()
 
-    an = Analyzer(obs, cfg["baseline_minutes"])
+    an = Analyzer(obs, cfg["baseline_minutes"], cfg.get("known_bssids") or ())
     timeline = RiskEngine(an, cfg).run().timeline
     base_first = {(a["ssid"], a["bssid"]): a["first_ts"] for a in duplicate_ssid_detector(obs)}
 

@@ -195,6 +195,11 @@ def main(argv=None) -> int:
     ap.add_argument("--speed", type=float, default=10.0,
                     help="replay speed multiplier; 0 = as fast as possible (default 10)")
     ap.add_argument("--duration", type=float, default=None, help="stop live capture after N seconds")
+    ap.add_argument("--hop", metavar="CHANNELS",
+                    help="live: hop channels, e.g. 1,6,11 or 1-13 or 2.4 or 5 or all")
+    ap.add_argument("--dwell", type=float, default=0.25, help="live: seconds per channel (default 0.25)")
+    ap.add_argument("--save-pcap", metavar="FILE",
+                    help="live: also save captured beacons / probe responses to a pcap")
     ap.add_argument("--keep", action="store_true",
                     help="keep existing data in --db instead of starting fresh (replay/live)")
     ap.add_argument("--host", default="127.0.0.1")
@@ -206,9 +211,19 @@ def main(argv=None) -> int:
     if args.pcap and not os.path.exists(args.pcap):
         print("[!] pcap not found: {}".format(args.pcap), file=sys.stderr)
         return 1
+    hop = None
+    if args.hop:
+        from .hopper import parse_channels
+        try:
+            hop = parse_channels(args.hop)
+        except ValueError as e:
+            ap.error(str(e))
+    if (args.hop or args.save_pcap) and not args.iface:
+        ap.error("--hop and --save-pcap only apply to live capture (--iface)")
     cfg = load_config(args.config)
     pipe = Pipeline(db, cfg, pcap=args.pcap, iface=args.iface, speed=args.speed,
-                    duration=args.duration, reset=not args.keep).start()
+                    duration=args.duration, reset=not args.keep, hop=hop, dwell=args.dwell,
+                    save_pcap=args.save_pcap).start()
     app = create_app(db, cfg, pipe)
     mode = pipe.status["mode"]
     print("[+] GhostAP dashboard ({}: {}) -> http://{}:{}".format(

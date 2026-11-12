@@ -1,33 +1,36 @@
 """Background pipeline for the dashboard: ingest frames and keep the risk scores fresh.
 
 Sources:
-  * replay - read a pcap and insert frames paced by their capture timestamps
-             (speed 10 = ten times real time, 0 = as fast as possible)
-  * live   - sniff beacons / probe responses on a monitor-mode interface (Linux, root)
+  * replay   - read a pcap and insert frames paced by their capture timestamps
+               (speed 10 = ten times real time, 0 = as fast as possible)
+  * live     - sniff beacons / probe responses on a monitor-mode interface (Linux,
+               root), optionally hopping channels and saving a pcap
+  * database - score what is already in the database once
 
-A second thread re-runs the risk engine and the baseline detector every
-`rescore_seconds`, writing alerts and the risk timeline to the database that the
-Flask API reads.
+A second thread scores incrementally every `rescore_seconds`: it reads only the
+observations added since the last round, feeds them to a long-lived Analyzer and
+RiskEngine, and appends the new risk-timeline rows. The cost of a round therefore
+depends on how much new data arrived, not on how long the capture has been running.
 """
 from __future__ import annotations
 
 import threading
 import time
-from typing import Optional
+from typing import List, Optional
 
-from .collector import LIVE_HELP, _is_beacon_or_probe_resp
+from .collector import LIVE_HELP, collect_live
 from .indicators import Analyzer
 from .parser import parse_frame
-from .risk import RiskEngine, duplicate_ssid_detector, load_config
+from .risk import DuplicateSSIDDetector, RiskEngine, duplicate_ssid_detector, load_config
 from .storage import Store
 
 
 def rescore(db: str, config: dict) -> dict:
-    """Rebuild profiles, rerun GhostAP + baseline detector, save the results."""
+    """Score a whole database from scratch (rebuild profiles, GhostAP, baseline detector)."""
     with Store(db) as store:
         store.rebuild_profiles()
         obs = store.observations()
-    an = Analyzer(obs, config["baseline_minutes"])
+    an = Analyzer(obs, config["baseline_minutes"], config.get("known_bssids") or ())
     report = RiskEngine(an, config).run()
     base = duplicate_ssid_detector(obs)
     with Store(db) as store:
@@ -37,11 +40,37 @@ def rescore(db: str, config: dict) -> dict:
     return {"frames": len(obs), "alerts": len(report.alerts), "baseline_alerts": len(base)}
 
 
+class IncrementalScorer:
+    """Keeps an Analyzer / RiskEngine alive and feeds it only new database rows."""
+
+    def __init__(self, db: str, config: dict):
+        self.db = db
+        self.config = config
+        self.analyzer = Analyzer((), config["baseline_minutes"], config.get("known_bssids") or ())
+        self.engine = RiskEngine(self.analyzer, config)
+        self.duplicates = DuplicateSSIDDetector()
+        self.last_id = 0
+
+    def step(self, final: bool = False) -> dict:
+        with Store(self.db) as store:
+            new, self.last_id = store.observations_after(self.last_id)
+            self.analyzer.add(new)
+            self.duplicates.update(new)
+            report = self.engine.run(final=final)
+            store.rebuild_profiles()
+            store.append_timeline(report.timeline)
+            store.save_alerts("ghostap", report.alerts)
+            store.save_alerts("baseline", self.duplicates.alerts())
+        return {"new_frames": len(new), "new_rows": len(report.timeline),
+                "alerts": len(report.alerts)}
+
+
 class Pipeline:
     def __init__(self, db: str, config: Optional[dict] = None, pcap: Optional[str] = None,
                  iface: Optional[str] = None, speed: float = 10.0,
                  duration: Optional[float] = None, rescore_seconds: float = 2.0,
-                 reset: bool = True):
+                 reset: bool = True, hop: Optional[List[int]] = None, dwell: float = 0.25,
+                 save_pcap: Optional[str] = None):
         if pcap and iface:
             raise ValueError("use either pcap or iface, not both")
         self.db = db
@@ -51,6 +80,7 @@ class Pipeline:
         self.duration = duration
         self.rescore_seconds = rescore_seconds
         self.reset = reset
+        self.hop, self.dwell, self.save_pcap = hop, dwell, save_pcap
         self._stop = threading.Event()
         self._ingest_done = threading.Event()
         self._lock = threading.Lock()
@@ -63,17 +93,22 @@ class Pipeline:
             "frames": 0,
             "message": "",
             "speed": speed if pcap else None,
+            "hopping": None,
+            "save_pcap": save_pcap if iface else None,
             "started_at": None,
             "last_scored_at": None,
+            "score_seconds": None,
             "last_frame_ts": None,
         }
 
     # -- control ------------------------------------------------------------ #
 
     def start(self) -> "Pipeline":
-        if self.reset and self.status["mode"] != "database":
-            with Store(self.db) as store:
+        with Store(self.db) as store:
+            if self.reset and self.status["mode"] != "database":
                 store.reset()
+            else:
+                store.save_timeline([])     # scored again from scratch below
         self._set(state="running", started_at=time.time())
         if self.status["mode"] == "database":
             self._ingest_done.set()
@@ -150,27 +185,21 @@ class Pipeline:
             self._ingest_done.set()
 
     def _ingest_live(self) -> None:
-        from scapy.sendrecv import sniff
-
         store = Store(self.db)
         counter = {"n": 0}
 
-        def handle(pkt):
-            obs = parse_frame(pkt)
-            if obs:
-                store.add(obs)
-                counter["n"] += 1
-                self._set(frames=counter["n"], last_frame_ts=obs["ts"])
+        def on_frame(obs):
+            counter["n"] += 1
+            self._set(frames=counter["n"], last_frame_ts=obs["ts"])
 
-        start = time.time()
         try:
-            while not self._stop.is_set():
-                if self.duration and time.time() - start >= self.duration:
-                    break
-                sniff(iface=self.iface, prn=handle, lfilter=_is_beacon_or_probe_resp,
-                      store=False, timeout=1)
-                store.commit()
-            self._set(message="live capture finished ({} frames)".format(counter["n"]))
+            n = collect_live(self.iface, self.duration, store, hop=self.hop, dwell=self.dwell,
+                             save_pcap=self.save_pcap, stop=self._stop, on_frame=on_frame,
+                             on_status=lambda m: self._set(hopping=m))
+            msg = "live capture finished ({} frames)".format(n)
+            if self.save_pcap:
+                msg += "; saved to {}".format(self.save_pcap)
+            self._set(message=msg)
         except Exception as e:  # no root, no monitor mode, no such interface ...
             msg = LIVE_HELP.format(err="{}: {}".format(type(e).__name__, e))
             self._set(state="error", message=msg)
@@ -179,11 +208,13 @@ class Pipeline:
             self._ingest_done.set()
 
     def _score_loop(self) -> None:
+        scorer = IncrementalScorer(self.db, self.config)
         while True:
             finished = self._ingest_done.wait(self.rescore_seconds)
             try:
-                rescore(self.db, self.config)
-                self._set(last_scored_at=time.time())
+                t0 = time.time()
+                scorer.step(final=finished)
+                self._set(last_scored_at=time.time(), score_seconds=round(time.time() - t0, 3))
             except Exception as e:
                 self._set(message="rescoring failed: {}: {}".format(type(e).__name__, e))
             if finished or self._stop.is_set():
