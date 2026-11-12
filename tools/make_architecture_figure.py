@@ -19,7 +19,7 @@ BOXES = [
     ("src", 0.0, 2.6, "Monitor-mode NIC\nor pcap file", "beacons + probe responses", False),
     ("col", 2.6, 2.6, "Collector", "collector.py / parser.py\nScapy, passive", False),
     ("db", 5.2, 2.6, "SQLite", "observations\nap_profiles", False),
-    ("ind", 7.8, 2.6, "Indicators", "indicators.py\nbaseline + 7 indicators", True),
+    ("ind", 7.8, 2.6, "Indicators", "indicators.py\nbaseline + 8 indicators", True),
     ("risk", 7.8, 0.6, "Risk engine", "risk.py · config.yaml\nweights, smoothing, levels", True),
     ("alerts", 5.2, 0.6, "Alerts", "reasons, contributions,\nbenign causes", False),
     ("web", 2.6, 0.6, "Flask API", "web.py · pipeline.py\nreplay / live rescoring", False),

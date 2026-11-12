@@ -29,14 +29,14 @@ STEPS = [
      "Passive only: beacon and probe-response frames, nothing is transmitted.",
      [PY, "-m", "ghostap.collector", "--pcap", "data/test_capture.pcap", "--reset"]),
     ("3/6  Indicators: compare every AP with the 2-minute baseline",
-     "Seven indicators, each 0..1 with a reason. Note the legit second\n"
+     "Eight indicators, each 0..1 with a reason. Note the legit second\n"
      "      MVSR_WiFi AP (a4:2b:b0:11:22:99) stays at ~0.",
      [PY, "-m", "ghostap.indicators"]),
     ("4/6  Risk engine: weighted score, smoothing, explainable alerts",
      "R = sum(w*x)/sum(w)*100, mean of the last 3 scores. GhostAP raises one alert;\n"
      "      the duplicate-SSID baseline flags all three MVSR_WiFi APs.",
      [PY, "-m", "ghostap.risk"]),
-    ("5/6  Evaluation on 10 labelled scenarios (5 attacks, 5 benign)",
+    ("5/6  Evaluation on 11 labelled scenarios (6 attacks, 5 benign)",
      "Precision, recall, F1, false-positive rate and latency vs. the baseline.",
      None),  # two commands, see run_step
     ("6/6  Dashboard: replay the capture and watch the alert appear",

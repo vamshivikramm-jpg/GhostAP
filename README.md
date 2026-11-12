@@ -37,7 +37,8 @@ ghostap/pipeline.py    background replay / live ingest + periodic rescoring
 ghostap/web.py         Flask API + dashboard server
 ghostap/static/        dashboard front end (HTML/CSS/JS, Plotly)
 tools/make_test_pcap.py synthetic capture with one evil twin
-tools/make_eval_set.py  10 labelled synthetic scenarios for evaluation
+tools/make_eval_set.py  11 labelled synthetic scenarios for evaluation
+tools/label_capture.py  list APs in a real capture and write its labels file (Phase 2)
 tools/demo.py          guided end-to-end demo (opens the dashboard)
 docs/                  project report, demo runbook, figures
 ghostap/evaluate.py    Phase 6 evaluation (also: python evaluate.py)
@@ -91,7 +92,7 @@ python -m ghostap.indicators --db data/ghostap.db --baseline-minutes 2
 ```
 
 The first N minutes of the capture are the **baseline** (what each SSID normally looks
-like). Every AP then gets seven indicator values in [0, 1], each with a reason:
+like). Every AP then gets eight indicator values in [0, 1], each with a reason:
 
 | Short | Indicator | Fires when |
 |-------|-----------|------------|
@@ -100,6 +101,7 @@ like). Every AP then gets seven indicator values in [0, 1], each with a reason:
 | CH | `channel_deviation` | new BSSID on a channel the SSID never used 1.0; known BSSID changed channel 0.5 |
 | RSSI | `rssi_jump` | signal more than 6 dB above baseline, reaching 1.0 at 16 dB above |
 | TSF | `tsf_anomaly` | TSF counter reset, or uptime far below sibling APs (log-scale ratio) |
+| FP | `ie_fingerprint` | beacon structure (element order, rates, capabilities, vendor elements) unlike any baseline AP of the SSID 1.0; known BSSID whose structure changed 0.6 |
 | CLONE | `bssid_conflict` | same BSSID alternating between channels, or sequence numbers going backwards |
 | BI | `beacon_interval_mismatch` | beacon interval differs from the SSID's baseline |
 
@@ -125,7 +127,7 @@ python -m ghostap.risk --db data/ghostap.db --config config.yaml
   advertised by more than one BSSID. Phase 6 compares GhostAP against this.
 
 On the synthetic capture, GhostAP raises one alert: the evil twin, MEDIUM 20 s and
-HIGH 30 s after it appears, with a peak score of 73. The baseline detector flags all
+HIGH 30 s after it appears, with a peak score of 77. The baseline detector flags all
 three `MVSR_WiFi` BSSIDs, so two of its three alerts are false positives.
 
 ## Dashboard (Phase 5)
@@ -183,22 +185,24 @@ Labels for `X.pcap` go in `X.labels.json` next to it:
 APs missing from the labels count as legit (`--unlabelled ignore` to skip them).
 Extra captures can be added with `--pcap X --labels Y`.
 
-Results on the **synthetic** set (5 attacks, 5 benign look-alikes; 39 APs in total):
+Results on the **synthetic** set (6 attacks, 5 benign look-alikes; 43 APs in total):
 
 | Detector | Precision | Recall | F1 | FPR | Latency mean / max |
 |---|---|---|---|---|---|
-| GhostAP | 1.00 | 0.80 | 0.89 | 0.00 | 17.5 s / 30 s |
-| Baseline (duplicate SSID) | 0.17 | 1.00 | 0.29 | 0.74 | 0 s / 0 s |
+| GhostAP | 1.00 | 0.83 | 0.91 | 0.00 | 16 s / 20 s |
+| Baseline (duplicate SSID) | 0.18 | 1.00 | 0.31 | 0.73 | 0 s / 0 s |
 
-GhostAP misses `s04_stealth_wpa2_twin`, a WPA2 twin with a spoofed vendor OUI on the
-legit channel. Only its TSF gives it away, so its risk score of 20 stays under the
-threshold of 30. The hardest benign case, a new same-vendor AP that has just
-booted, scores 28. These synthetic numbers check the logic; the real results come
-from rerunning on the Phase 2 lab captures.
+The beacon fingerprint catches `s04_stealth_wpa2_twin` (score 32.9), a WPA2 twin with
+a spoofed vendor OUI on the legit channel running from a phone hotspot. The hardest
+benign case, a new same-vendor AP that has just booted, stays at 23.2. GhostAP misses
+`s11_fingerprint_clone_twin` (16.8), an adaptive twin that also copies the real AP's
+beacon structure, so only its TSF differs. The beacon profiles in this set were designed
+by us, so these synthetic numbers check the logic; the real results come from rerunning
+on the Phase 2 lab captures.
 
 ## Run live (Linux only)
 
-Requires root and a Wi-Fi adapter that supports monitor mode.
+Requires root, `iw`, and a Wi-Fi adapter that supports monitor mode.
 
 ```bash
 sudo ip link set wlan0 down
@@ -210,6 +214,25 @@ sudo .venv/bin/python -m ghostap.collector --iface wlan0 --duration 120
 
 Options: `--duration` (seconds, default 60, live only), `--db` (default
 `data/ghostap.db`), `--reset`.
+
+Live options (collector and dashboard):
+
+- `--hop 1,6,11`: hop channels (`1-13`, `2.4`, `5`, `all` also work); `--dwell 0.25` sets
+  the seconds spent on each channel. Without hopping you only hear one channel, and a
+  twin on another channel is invisible.
+- `--save-pcap lab1.pcap`: record the beacons and probe responses, so the session can be
+  labelled and evaluated later.
+
+```bash
+sudo .venv/bin/python -m ghostap.web --iface wlan0 --hop 1,6,11 --save-pcap data/lab1.pcap
+python tools/label_capture.py data/lab1.pcap                       # list APs, find your twin
+python tools/label_capture.py data/lab1.pcap --evil <twin-bssid>   # writes lab1.labels.json
+python evaluate.py --dataset data                                  # metrics on real captures
+```
+
+`config.yaml` → `known_bssids` is an allow-list of your own APs. An allow-listed AP that
+appears later is not flagged as new, but cloning it is still detected. Scoring is
+incremental, so a 20-minute capture rescores in about 0.7 s instead of 70 s.
 
 ## macOS note
 

@@ -354,13 +354,24 @@ def make_charts(out: str, metrics: List[dict], sweep: List[dict], scen: List[dic
 
     # 4) Risk timelines, one panel per scenario.
     names_s = sorted({r["scenario"] for r in rows})
-    cols = 5 if len(names_s) > 4 else len(names_s)
-    nrows = (len(names_s) + cols - 1) // cols
+    attack_names = [n for n in names_s if any(r["scenario"] == n and r["label"] == "evil_twin" for r in rows)]
+    benign_names = [n for n in names_s if n not in attack_names]
+    groups = [g for g in (attack_names, benign_names) if g]
+    cols = max(len(g) for g in groups)
+    if cols > 6:                      # many captures: plain grid
+        cols = 6
+        groups = [names_s[i:i + cols] for i in range(0, len(names_s), cols)]
+    nrows = len(groups)
     fig, axes = plt.subplots(nrows, cols, figsize=(3.1 * cols, 2.5 * nrows),
                              sharey=True, squeeze=False)
-    for ax in axes.flat[len(names_s):]:
-        ax.set_visible(False)
-    for ax, name in zip(axes.flat, names_s):
+    placed = []
+    for ri, g in enumerate(groups):
+        for ci in range(cols):
+            if ci < len(g):
+                placed.append((axes[ri][ci], g[ci]))
+            else:
+                axes[ri][ci].set_visible(False)
+    for ax, name in placed:
         _style(ax)
         sub = [r for r in rows if r["scenario"] == name]
         t0 = sub[0]["capture_start"]
@@ -379,9 +390,9 @@ def make_charts(out: str, metrics: List[dict], sweep: List[dict], scen: List[dic
         ax.set_title(name, fontsize=9, color=INK, loc="left")
         ax.set_ylim(0, 100)
         ax.set_xlim(120, max(r["capture_start"] for r in sub) - t0 + 300)
-    fig.text(0.01, 0.005, "Smoothed GhostAP risk after the 2-min baseline. Blue = evil twin, grey = legit APs, "
-             "dotted = attack start, dashed = MEDIUM / HIGH thresholds. x: capture time (s).",
-             fontsize=8.5, color=INK2)
+    fig.text(0.01, 0.005, "Smoothed GhostAP risk after the 2-min baseline. Top row: captures with an evil twin; "
+             "bottom row: benign captures. Blue = evil twin, grey = legit APs, dotted = attack start, "
+             "dashed = MEDIUM / HIGH thresholds. x: capture time (s).", fontsize=8.5, color=INK2)
     fig.tight_layout(rect=(0, 0.03, 1, 1))
     paths.append(os.path.join(out, "risk_timelines.png"))
     fig.savefig(paths[-1], dpi=150)
