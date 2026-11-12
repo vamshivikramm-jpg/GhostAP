@@ -22,7 +22,7 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 | 4 | Risk engine | ✅ done |
 | 5 | Dashboard | ✅ done |
 | 6 | Evaluation | ✅ done (synthetic set; rerun on Phase 2 captures) |
-| 7 | Report & demo | todo |
+| 7 | Report & demo | ✅ draft: [docs/REPORT.md](docs/REPORT.md), [docs/DEMO.md](docs/DEMO.md) |
 
 ## Layout
 
@@ -38,10 +38,21 @@ ghostap/web.py         Flask API + dashboard server
 ghostap/static/        dashboard front end (HTML/CSS/JS, Plotly)
 tools/make_test_pcap.py synthetic capture with one evil twin
 tools/make_eval_set.py  10 labelled synthetic scenarios for evaluation
+tools/demo.py          guided end-to-end demo (opens the dashboard)
+docs/                  project report, demo runbook, figures
 ghostap/evaluate.py    Phase 6 evaluation (also: python evaluate.py)
 tests/                 pytest suite
 data/                  captures and databases (gitignored)
 ```
+
+## Quick demo
+
+```bash
+python tools/demo.py          # step-by-step demo; ends with the live dashboard
+```
+
+The project report is in [docs/REPORT.md](docs/REPORT.md), and the presenter
+runbook with likely questions is in [docs/DEMO.md](docs/DEMO.md).
 
 ## Setup
 
