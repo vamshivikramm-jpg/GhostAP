@@ -59,9 +59,24 @@ CREATE TABLE IF NOT EXISTS alerts (
     indicators    TEXT,                      -- JSON: [{name, value, weight, contribution, reason}]
     reasons       TEXT,                      -- human-readable summary
     benign_causes TEXT,                      -- JSON: [str]
+    triage_status TEXT DEFAULT 'new',        -- analyst: new / investigating / confirmed / false_positive
+    triage_note   TEXT,
+    triage_ts     REAL,
     UNIQUE (detector, ssid, bssid)
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_score ON alerts(score);
+
+-- Latest score and indicator breakdown of every AP (for the dashboard's AP view).
+CREATE TABLE IF NOT EXISTS ap_latest (
+    ssid        TEXT NOT NULL,
+    bssid       TEXT NOT NULL,
+    ts          REAL NOT NULL,
+    raw_score   REAL NOT NULL,
+    score       REAL NOT NULL,
+    level       TEXT NOT NULL,
+    indicators  TEXT,                         -- JSON, same shape as alerts.indicators
+    PRIMARY KEY (ssid, bssid)
+);
 
 -- Phase 4: risk score of every AP at every evaluation step.
 CREATE TABLE IF NOT EXISTS risk_timeline (
@@ -118,7 +133,12 @@ class Store:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(observations)")}
         if "fingerprint" not in cols:
             self.conn.execute("ALTER TABLE observations ADD COLUMN fingerprint TEXT")
-            self.conn.commit()
+        acols = {r[1] for r in self.conn.execute("PRAGMA table_info(alerts)")}
+        for col, decl in (("triage_status", "TEXT DEFAULT 'new'"), ("triage_note", "TEXT"),
+                          ("triage_ts", "REAL")):
+            if col not in acols:
+                self.conn.execute("ALTER TABLE alerts ADD COLUMN {} {}".format(col, decl))
+        self.conn.commit()
 
     def add(self, obs: dict) -> None:
         self.conn.execute(_INSERT, tuple(obs.get(f) for f in OBS_FIELDS))
@@ -138,7 +158,7 @@ class Store:
 
     def reset(self) -> None:
         with self.conn:
-            for table in ("observations", "ap_profiles", "alerts", "risk_timeline"):
+            for table in ("observations", "ap_profiles", "alerts", "risk_timeline", "ap_latest"):
                 self.conn.execute("DELETE FROM {}".format(table))
 
     def profiles(self) -> List[dict]:
@@ -246,6 +266,36 @@ class Store:
             params.append(bssid)
         sql += " ORDER BY ts, ssid, bssid"
         return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+
+    # ---- dashboard: latest per-AP breakdown and analyst triage ---------------- #
+
+    TRIAGE_STATES = ("new", "investigating", "confirmed", "false_positive")
+
+    def save_latest(self, rows: List[dict]) -> None:
+        with self.conn:
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO ap_latest (ssid, bssid, ts, raw_score, score, level, indicators) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(r["ssid"], r["bssid"], r["ts"], r["raw_score"], r["score"], r["level"],
+                  json.dumps(r.get("indicators") or [])) for r in rows])
+
+    def latest(self) -> dict:
+        """{(ssid, bssid): latest score row with decoded indicators}"""
+        out = {}
+        for r in self.conn.execute("SELECT * FROM ap_latest").fetchall():
+            d = dict(r)
+            d["indicators"] = json.loads(d["indicators"]) if d["indicators"] else []
+            out[(d["ssid"], d["bssid"])] = d
+        return out
+
+    def set_triage(self, alert_id: int, status: str, note: Optional[str], ts: float) -> bool:
+        if status not in self.TRIAGE_STATES:
+            raise ValueError("unknown triage status: {}".format(status))
+        with self.conn:
+            cur = self.conn.execute(
+                "UPDATE alerts SET triage_status = ?, triage_note = ?, triage_ts = ? WHERE id = ?",
+                (status, (note or "")[:2000], ts, alert_id))
+        return cur.rowcount > 0
 
     def close(self) -> None:
         self.commit()

@@ -145,17 +145,32 @@ sudo .venv/bin/python -m ghostap.web --iface wlan0
 
 Open <http://127.0.0.1:8050>. Port 5000 is avoided because macOS uses it for AirPlay.
 
-- **Status bar and tiles:** mode (replay / live / database), capture clock, AP and
-  frame counts, HIGH and MEDIUM alerts, baseline-detector alerts, and baseline-learning progress.
-- **Alert list:** ranked by risk, with a tab to switch to the duplicate-SSID baseline detector.
-- **Alert detail:** each indicator's contribution (bar chart and table, with reasons), the
-  AP's raw and smoothed risk over time against the thresholds, and possible benign causes.
-- **Risk timeline:** smoothed score of every AP over capture time, with the baseline window
-  shaded and alert / escalation markers, plus an event list.
-- **AP table:** profile and current/peak risk for every AP.
+- **Verdict banner:** one plain-language sentence, e.g. "Evil twin suspected on MVSR_WiFi"
+  with the main reasons, "All clear", or "Learning what normal looks like" with a progress bar.
+- **Tiles:** networks, access points, HIGH / MEDIUM alerts, and how many alarms a name-only
+  check would raise. Click a tile to jump to that list.
+- **Alerts / Networks / Name-only tabs:** alerts ranked by risk; every network with its
+  access points underneath (a twin shows up as an extra entry with a red risk bar); and
+  the duplicate-name detector's flags, marked "GhostAP agrees" or "GhostAP: normal".
+- **Access point detail:** opens for *any* AP, not just alerting ones.
+  - a verdict, a 0–100 risk gauge, and the top reasons;
+  - a **side-by-side comparison** with the network's known APs (vendor, channel, security,
+    signal, uptime, beacon fingerprint, interval), marking every difference with ≠;
+  - expandable explanations of all eight indicators, with value × weight = points;
+  - the AP's raw and smoothed risk over time.
+- **Triage:** mark an alert New / Investigating / Confirmed attack / False positive with a
+  note, saved on the server. A checklist tracks which innocent explanations you have ruled
+  out.
+- **Risk timeline:** click a line to inspect that AP, switch Smoothed / Raw, show only
+  suspicious APs, drag to zoom. Events can be filtered and clicked.
+- **AP table:** searchable (`/`) and sortable by any column.
+- **Also:** notifications for new or escalated alerts, light / dark toggle, a "How it
+  works" guide (`?`), links to a selected AP (`#ap=…`), and `j` / `k` to step through the
+  list.
 
 During a replay or live capture, a background thread re-runs the risk engine every
-2 s, and the page polls the API every 2 s. API: `/api/summary`, `/api/aps`,
+2 s, and the page polls the API every 2 s. API: `/api/summary`, `/api/aps`, `/api/networks`,
+`/api/ap?ssid=…&bssid=…`, `POST /api/alerts/<id>/triage` (JSON only),
 `/api/alerts?detector=ghostap|baseline|all`, `/api/alerts/<id>`, `/api/timeline`,
 `/api/events`. Plotly is served from the installed `plotly` package, so the dashboard
 works offline. SSIDs come from the air and can be chosen by an attacker, so the front

@@ -35,6 +35,7 @@ def rescore(db: str, config: dict) -> dict:
     base = duplicate_ssid_detector(obs)
     with Store(db) as store:
         store.save_timeline(report.timeline)
+        store.save_latest(report.latest)
         store.save_alerts("ghostap", report.alerts)
         store.save_alerts("baseline", base)
     return {"frames": len(obs), "alerts": len(report.alerts), "baseline_alerts": len(base)}
@@ -59,6 +60,7 @@ class IncrementalScorer:
             report = self.engine.run(final=final)
             store.rebuild_profiles()
             store.append_timeline(report.timeline)
+            store.save_latest(report.latest)
             store.save_alerts("ghostap", report.alerts)
             store.save_alerts("baseline", self.duplicates.alerts())
         return {"new_frames": len(new), "new_rows": len(report.timeline),

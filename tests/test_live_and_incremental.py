@@ -206,3 +206,24 @@ def test_label_capture_roundtrip(capture, tmp_path, capsys):
     raw = json.load(open(tmp_path / "lab1.labels.json"))
     assert 179 < labels[EVIL[1]]["attack_start"] - raw["capture_start"] < 181
     assert label_capture.main([pcap, "--evil", "02:00:00:00:00:00"]) == 1
+
+
+def test_old_alerts_table_gets_triage_columns(tmp_path):
+    db = str(tmp_path / "old_alerts.db")
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, detector TEXT NOT NULL, "
+                 "ssid TEXT NOT NULL, bssid TEXT NOT NULL, level TEXT NOT NULL, score REAL NOT NULL, "
+                 "first_ts REAL NOT NULL, high_ts REAL, peak_ts REAL, last_ts REAL, indicators TEXT, "
+                 "reasons TEXT, benign_causes TEXT, UNIQUE (detector, ssid, bssid))")
+    conn.execute("INSERT INTO alerts (detector, ssid, bssid, level, score, first_ts) "
+                 "VALUES ('ghostap', 'A', 'b', 'HIGH', 70, 1)")
+    conn.commit()
+    conn.close()
+    with Store(db) as s:
+        a = s.alerts()[0]
+        assert a["triage_status"] == "new"
+        assert s.set_triage(a["id"], "confirmed", "seen", 5.0)
+        assert s.alert(a["id"])["triage_status"] == "confirmed"
+        # rescoring (upsert) keeps the analyst's triage
+        s.save_alerts("ghostap", [dict(a, score=80.0, indicators=[], benign_causes=[])])
+        assert s.alert(a["id"])["triage_status"] == "confirmed"

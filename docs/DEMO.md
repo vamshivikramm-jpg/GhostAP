@@ -34,10 +34,11 @@ It pauses after each step; press Enter to continue.
 | 3:00 | 4 Risk | alert + contributions + benign causes | "Weighted score of 77: the downgrade gives 19 points, the beacon fingerprint 16 (it's built by different software than the real APs), the unknown vendor 13, the fresh TSF 13, the signal 10, the channel 6. Each alert also lists innocent explanations to rule out." Then: "The baseline flagged all three MVSR APs; two are false alarms." |
 | 4:00 | 5 Evaluation | metrics table | "Eleven scenarios: six attacks, five benign look-alikes. GhostAP: precision 1.0, F1 0.91, zero false alarms. Baseline: precision 0.18, 73% false-alarm rate. The beacon fingerprint even catches a twin that knows the WPA2 password and copies the vendor and channel. We miss one: an attacker who also copies the beacon structure." |
 | 5:00 | 6 Dashboard | browser opens | "This replays the same capture at 10× speed. For the first 12 s it's learning the baseline…" |
-| 5:30 | | alert appears (~t+200 s) | "…the twin is flagged MEDIUM at t+200 s, 20 s after it appeared, and HIGH 10 s later. The delay is deliberate: we average 3 scoring steps so one odd frame can't trigger an alarm." |
-| 6:15 | | click the alert | Walk through the bar chart of contributions and the reasons table. "Every number on the screen can be traced back to a field in a beacon." |
-| 6:45 | | Baseline tab | "Same capture, baseline detector: three alerts, two of them on legitimate APs." |
-| 7:15 | Close | `docs/figures/risk_timelines.png` | "Blue lines cross the threshold, grey ones don't, except the stealth WPA2 twin, which is our honest limitation." |
+| 5:30 | | banner turns red (~t+200 s) | "…a notification pops up and the banner says *Evil twin suspected on MVSR_WiFi*. It was flagged MEDIUM 20 s after it appeared and HIGH 10 s later. The delay is deliberate: we average 3 scoring steps so one odd frame can't trigger an alarm." |
+| 6:00 | | Inspect → comparison table | "This is what convinces people: the suspect next to the real access points. Every ≠ is a difference: other vendor, channel 11, open instead of WPA2, 17 dB stronger, booted 1 ms ago versus 2.5 hours, and a beacon built by different software." Open one indicator row to show its explanation and the value × weight maths. |
+| 6:40 | | Networks tab, then click a real AP | "Grouped by name, the twin is the odd one out. Click a real access point: *Looks normal*, every row in the comparison matches." |
+| 7:00 | | Name-only tab, then Triage | "The simple duplicate-name check flags all three, and two are innocent. Finally, an analyst can mark this alert *Confirmed attack* and add a note; it's saved on the server." |
+| 7:15 | Close | `docs/figures/risk_timelines.png` | "Blue lines cross the threshold, grey ones don't. The one blue line that stays low is s11, a twin that copies even the beacon structure: our honest limitation." |
 
 ## If something goes wrong
 
@@ -47,6 +48,7 @@ It pauses after each step; press Enter to continue.
 | Browser doesn't open | open <http://127.0.0.1:8050> by hand |
 | Replay finished before you got there | refresh: the finished state still shows all alerts; or restart with `--speed 5` |
 | Dashboard won't start at all | show `results/*.png` and `results/summary.md` |
+| Want a clean start mid-demo | reload the page; selection and theme are kept, and the replay can be restarted with the same command |
 | Asked for a live capture | macOS can't do monitor mode with USB adapters; live capture needs Linux. Show the clear error: `python -m ghostap.collector --iface en0` |
 
 ## Live capture (only if you have the Linux laptop and adapter)

@@ -112,3 +112,54 @@ def test_live_capture_error_is_reported(tmp_path):
     st = pipe.snapshot()
     assert st["state"] == "error"
     assert "monitor mode" in st["message"]
+
+
+# --------------------------------------------------------------- dashboard v2
+
+def test_networks_group_aps_by_ssid(client):
+    nets = client.get("/api/networks").get_json()
+    assert nets[0]["ssid"] == "MVSR_WiFi"                       # most suspicious first
+    mvsr = nets[0]
+    assert len(mvsr["aps"]) == 3 and mvsr["channels"] == [1, 6, 11]
+    evil = next(a for a in mvsr["aps"] if a["bssid"] == EVIL)
+    assert evil["alert_id"] and evil["level"] == "HIGH" and evil["in_baseline"] is False
+    assert all(a["in_baseline"] for a in mvsr["aps"] if a["bssid"] != EVIL)
+
+
+def test_ap_detail_has_comparison_data(client):
+    d = client.get("/api/ap?ssid=MVSR_WiFi&bssid=" + EVIL.upper()).get_json()
+    assert d["ap"]["bssid"] == EVIL and d["ap"]["oui"] == "00:c0:ca"
+    assert d["ap"]["uptime_first_seen"] < 1 and d["ap"]["fingerprints"]
+    assert {s["bssid"] for s in d["siblings"]} == {"a4:2b:b0:11:22:33", "a4:2b:b0:11:22:99"}
+    assert all(s["uptime_first_seen"] > 3600 for s in d["siblings"])
+    assert not set(d["ap"]["fingerprints"]) & {f for s in d["siblings"] for f in s["fingerprints"]}
+    assert d["alert"]["level"] == "HIGH" and d["baseline_alert"] is not None
+    assert d["latest"]["level"] == "HIGH" and len(d["latest"]["indicators"]) == 8
+    legit = client.get("/api/ap?ssid=Cafe_Guest&bssid=f0:9f:c2:aa:bb:cc").get_json()
+    assert legit["alert"] is None and legit["siblings"] == [] and legit["latest"]["level"] == "LOW"
+    assert client.get("/api/ap?ssid=Nope&bssid=00:00:00:00:00:00").status_code == 404
+
+
+def test_summary_has_verdict_fields(client):
+    s = client.get("/api/summary").get_json()
+    assert s["networks"] == 2
+    assert s["top_alert"]["bssid"] == EVIL and "security_downgrade" in s["top_alert"]["reasons"]
+
+
+def test_triage_roundtrip_and_validation(client):
+    aid = client.get("/api/alerts").get_json()[0]["id"]
+    r = client.post("/api/alerts/{}/triage".format(aid),
+                    json={"status": "investigating", "note": "<script>x</script> checking"})
+    assert r.status_code == 200 and r.get_json()["triage_status"] == "investigating"
+    a = client.get("/api/alerts/{}".format(aid)).get_json()
+    assert a["triage_note"] == "<script>x</script> checking"      # stored as text; UI escapes it
+    assert client.post("/api/alerts/{}/triage".format(aid), json={"status": "pwned"}).status_code == 400
+    # form posts (what a cross-site page could send without CORS) are refused
+    assert client.post("/api/alerts/{}/triage".format(aid), data={"status": "confirmed"}).status_code == 415
+    assert client.post("/api/alerts/999999/triage", json={"status": "new"}).status_code == 404
+    assert client.get("/api/aps").get_json()[0]["triage_status"] == "investigating"
+
+
+def test_static_files_revalidate(client):
+    r = client.get("/static/app.js")
+    assert "no-cache" in r.headers.get("Cache-Control", "") or "max-age=0" in r.headers.get("Cache-Control", "")

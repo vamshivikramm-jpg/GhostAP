@@ -253,17 +253,31 @@ baseline detector's alerts, so both are evaluated identically.
 
 ### 4.7 Dashboard
 
-`python -m ghostap.web` serves a Flask JSON API (`/api/summary`, `/api/aps`, `/api/alerts`,
-`/api/alerts/<id>`, `/api/timeline`, `/api/events`) and a single-page dashboard:
+`python -m ghostap.web` serves a Flask JSON API (`/api/summary`, `/api/aps`, `/api/networks`,
+`/api/ap`, `/api/alerts`, `/api/timeline`, `/api/events`, and a JSON-only triage endpoint)
+and a single-page dashboard. It is designed so that someone who has never read the code
+can see *why* an access point is suspicious:
 
-- **Status bar and summary tiles:** source, capture clock, number of APs and frames,
-  alert counts, and baseline progress.
-- **Alert list:** ranked by risk, with a switch to the baseline detector's alerts.
-- **Alert detail:** a bar chart of each indicator's contribution, the AP's raw and
-  smoothed risk over time against the thresholds, the reasons, and the benign causes.
-- **Risk timeline:** every AP's risk over time, with the baseline period shaded and
-  alert markers, plus an event list.
-- **AP table:** profile and current / peak risk for every AP.
+- **Verdict banner:** one plain-language sentence ("Evil twin suspected on MVSR_WiFi",
+  "All clear", or "Learning what normal looks like" with a progress bar).
+- **Networks view:** access points grouped under their network name. A twin appears as an
+  extra entry under the network it imitates, with a red risk bar.
+- **Access point detail**, available for every AP, not only alerting ones:
+  - a 0–100 risk gauge and the top reasons;
+  - a side-by-side comparison with the network's known APs (vendor, channel, security,
+    signal, uptime when the AP appeared, beacon fingerprint, beacon interval), with every
+    difference marked;
+  - expandable explanations of the eight indicators, showing value × weight = points;
+  - the AP's risk over time.
+- **Triage:** analysts mark alerts New / Investigating / Confirmed attack / False
+  positive, with notes stored on the server, and tick off the innocent explanations they
+  have ruled out.
+- **Risk timeline, events and AP table:** click any line, event or row to inspect that AP.
+  The timeline toggles between smoothed and raw scores and can show only suspicious APs.
+  The table can be searched and sorted.
+- **Comparison and usability:** a "Name-only" tab shows what the duplicate-SSID check
+  would have flagged, for comparison. There are also notifications for new alerts, a
+  light / dark theme, a built-in "How it works" guide, and keyboard shortcuts.
 
 A background pipeline either replays a pcap paced by its original timestamps (e.g.
 10× real time) or sniffs live, and updates the scores every 2 s. The page polls every

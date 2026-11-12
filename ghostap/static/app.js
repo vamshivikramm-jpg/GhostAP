@@ -1,407 +1,763 @@
-/* GhostAP dashboard: polls the Flask API and renders with Plotly. */
+/* GhostAP dashboard: polls the Flask API, renders with plain DOM + Plotly.
+ * Every value that came from the air (SSIDs, reasons, notes) goes through esc(). */
 (function () {
   "use strict";
 
-  const LABELS = {
-    security_downgrade: "Security downgrade",
-    new_bssid_oui: "New BSSID / vendor",
-    tsf_anomaly: "TSF / uptime",
-    ie_fingerprint: "Beacon fingerprint",
-    bssid_conflict: "Cloned BSSID",
-    rssi_jump: "Signal jump",
-    channel_deviation: "Channel deviation",
-    beacon_interval_mismatch: "Beacon interval",
-    duplicate_ssid: "Duplicate SSID",
+  // ------------------------------------------------------------------ copy
+  const IND = {
+    security_downgrade: {
+      label: "Security downgrade",
+      long: "Compares the security this access point advertises with what the network used while GhostAP was learning it. An evil twin usually can't know the real password, so it often runs open (no password) to let victims join.",
+    },
+    new_bssid_oui: {
+      label: "New radio / vendor",
+      long: "Every radio has an address (BSSID) whose first half identifies the manufacturer. A radio that appears after the learning period is new; one from a manufacturer the network has never used is much more suspicious than one from the same vendor.",
+    },
+    channel_deviation: {
+      label: "Unusual channel",
+      long: "Checks whether this access point uses a channel the network never used. Attackers often pick a free channel; real networks can also add channels, so this weighs little on its own.",
+    },
+    rssi_jump: {
+      label: "Signal jump",
+      long: "Compares signal strength with what was learned. An attacker usually sits close to the victim, so the twin is often much stronger than the real access points.",
+    },
+    tsf_anomaly: {
+      label: "Freshly booted",
+      long: "Every beacon carries a microsecond clock (TSF) that starts at zero when the device boots. Real access points run for hours or days; an evil twin is usually started just before the attack. A clock that jumps back means a reboot, or two devices sharing an address.",
+    },
+    ie_fingerprint: {
+      label: "Beacon fingerprint",
+      long: "How a beacon is built (the order of its fields, supported speeds, capabilities, vendor extras) depends on the hardware and software. A laptop or phone pretending to be an enterprise access point usually builds its beacons differently, even if it copies the name, vendor and channel.",
+    },
+    bssid_conflict: {
+      label: "Cloned address",
+      long: "Looks for one radio address behaving like two devices: jumping back and forth between channels, or frame counters that run backwards. That happens when an attacker copies the exact address of a real access point.",
+    },
+    beacon_interval_mismatch: {
+      label: "Beacon timing",
+      long: "Access points announce themselves at a fixed interval (usually 100 time units). A different interval from the rest of the network suggests different equipment or configuration.",
+    },
+    duplicate_ssid: {
+      label: "Duplicate name",
+      long: "The simple comparison detector: it flags every access point whose network name is used by more than one access point.",
+    },
   };
-  const SLOTS = 7; // categorical slots before folding into "Other"
+  const TRIAGE = [
+    ["new", "New"], ["investigating", "Investigating"],
+    ["confirmed", "Confirmed attack"], ["false_positive", "False positive"],
+  ];
+  const SLOTS = 7;
 
   const state = {
-    detector: "ghostap",
-    selected: null,       // alert id
-    summary: null,
-    t0: null,
-    colorOf: new Map(),   // "ssid|bssid" -> slot index (by first appearance; never re-ranked)
-    lastJSON: {},
+    tab: "alerts", sel: null, summary: null, t0: null,
+    colorOf: new Map(), last: {}, scoreField: "score", onlyAlerting: false,
+    evFilter: "all", sort: { key: "peak_score", dir: -1 }, search: "",
+    aps: [], ghost: [], base: [], networks: [], series: [], events: [],
+    known: null, plotBound: false, apPlotKey: null,
   };
 
-  // ---------- helpers ----------
+  // ------------------------------------------------------------------ helpers
   const $ = (id) => document.getElementById(id);
   const esc = (v) => String(v == null ? "" : v)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const rel = (ts) => (ts == null || state.t0 == null) ? "–" : "t+" + Math.round(ts - state.t0) + "s";
-  const fmt = (n, d = 1) => (n == null ? "–" : Number(n).toFixed(d));
-  const key = (o) => o.ssid + "|" + o.bssid;
-  const level = (lvl) => lvl
-    ? `<span class="lvl"><i class="lvl-icon ${esc(lvl)}"></i>${esc(lvl)}</span>`
-    : `<span class="muted">–</span>`;
+  const fmt = (n, d = 1) => (n == null || Number.isNaN(n) ? "–" : Number(n).toFixed(d));
+  const keyOf = (o) => o.ssid + "\u0000" + o.bssid;
+  const isSel = (o) => state.sel && state.sel.ssid === o.ssid && state.sel.bssid === o.bssid;
+  const lvl = (l) => l ? `<span class="lvl"><i class="lvl-icon ${esc(l)}"></i>${esc(l)}</span>` : `<span class="muted">–</span>`;
+  const label = (n) => (IND[n] ? IND[n].label : n);
+  const th = () => (state.summary ? state.summary.thresholds : { medium: 30, high: 60 });
+  const levelFor = (s) => (s == null ? null : s >= th().high ? "HIGH" : s >= th().medium ? "MEDIUM" : "LOW");
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } },
+  };
 
+  function uptime(s) {
+    if (s == null) return "–";
+    if (s < 1) return Math.round(s * 1000) + " ms";
+    if (s < 120) return Math.round(s) + " s";
+    if (s < 7200) return Math.round(s / 60) + " min";
+    if (s < 172800) return (s / 3600).toFixed(1) + " h";
+    return (s / 86400).toFixed(1) + " days";
+  }
+  function riskbar(score, level) {
+    if (score == null) return '<span class="muted">–</span>';
+    const w = Math.max(2, Math.min(100, score));
+    return `<span class="riskbar" title="Risk ${fmt(score)} of 100"><span class="track"><span class="fill ${esc(level || "")}" style="width:${w}%;display:block"></span></span><span class="n">${fmt(score, 0)}</span></span>`;
+  }
+  function triageTag(t) {
+    if (!t || t === "new") return "";
+    const name = (TRIAGE.find((x) => x[0] === t) || [t, t])[1];
+    return `<span class="tag triage-${esc(t)}">${esc(name)}</span>`;
+  }
   function colorFor(k) {
     if (!state.colorOf.has(k)) state.colorOf.set(k, state.colorOf.size);
     const i = state.colorOf.get(k);
     return i < SLOTS ? css("--s" + (i + 1)) : css("--s-other");
   }
-
   async function get(url) {
     const r = await fetch(url, { cache: "no-store" });
     if (!r.ok) throw new Error(url + " -> " + r.status);
     return r.json();
   }
-
-  // Only re-render a section when its data actually changed.
   function changed(name, data) {
     const s = JSON.stringify(data);
-    if (state.lastJSON[name] === s) return false;
-    state.lastJSON[name] = s;
+    if (state.last[name] === s) return false;
+    state.last[name] = s;
     return true;
   }
-
+  function topReasonNames(reasons) {
+    return [...String(reasons || "").matchAll(/([a-z_]+) \(\+/g)].map((m) => label(m[1]).toLowerCase());
+  }
+  const PLOT_CFG = { displayModeBar: false, responsive: true };
   function baseLayout(extra) {
     return Object.assign({
-      paper_bgcolor: "rgba(0,0,0,0)",
-      plot_bgcolor: "rgba(0,0,0,0)",
+      paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
       font: { family: 'system-ui, -apple-system, "Segoe UI", sans-serif', size: 12, color: css("--text-2") },
-      margin: { l: 44, r: 16, t: 10, b: 40 },
+      margin: { l: 42, r: 14, t: 10, b: 40 },
       hoverlabel: { bgcolor: css("--surface"), bordercolor: css("--axis"), font: { color: css("--text") } },
-      xaxis: { gridcolor: css("--grid"), linecolor: css("--axis"), zeroline: false, tickfont: { color: css("--muted") } },
-      yaxis: { gridcolor: css("--grid"), linecolor: css("--axis"), zeroline: false, tickfont: { color: css("--muted") } },
+      xaxis: { gridcolor: css("--grid"), linecolor: css("--axis"), zeroline: false, tickfont: { color: css("--muted") },
+               title: { text: "capture time (s)", font: { size: 11, color: css("--muted") } } },
+      yaxis: { range: [0, 100], gridcolor: css("--grid"), zeroline: false, tickfont: { color: css("--muted") } },
       showlegend: false,
     }, extra || {});
   }
-  const PLOT_CFG = { displayModeBar: false, responsive: true };
-
-  function thresholdShapes(xmax) {
-    const th = state.summary ? state.summary.thresholds : { medium: 30, high: 60 };
-    const line = (y, color) => ({
-      type: "line", xref: "paper", x0: 0, x1: 1, y0: y, y1: y,
-      line: { color, width: 1, dash: "dash" }, layer: "below",
-    });
-    const ann = (y, text) => ({
-      xref: "paper", x: 1, y, yanchor: "bottom", xanchor: "right", showarrow: false,
-      text, font: { size: 11, color: css("--muted") },
-    });
-    return {
-      shapes: [line(th.medium, css("--serious")), line(th.high, css("--critical"))],
-      annotations: [ann(th.medium, "MEDIUM ≥ " + th.medium), ann(th.high, "HIGH ≥ " + th.high)],
-    };
+  function thresholdDecor() {
+    const t = th();
+    const line = (y, c) => ({ type: "line", xref: "paper", x0: 0, x1: 1, y0: y, y1: y, line: { color: c, width: 1, dash: "dash" }, layer: "below" });
+    const ann = (y, text) => ({ xref: "paper", x: 1, y, yanchor: "bottom", xanchor: "right", showarrow: false, text, font: { size: 11, color: css("--muted") } });
+    const shapes = [line(t.medium, css("--serious")), line(t.high, css("--critical"))];
+    const annotations = [ann(t.medium, "MEDIUM ≥ " + t.medium), ann(t.high, "HIGH ≥ " + t.high)];
+    const s = state.summary;
+    if (s && s.baseline_seconds) {
+      shapes.push({ type: "rect", xref: "x", yref: "paper", x0: 0, x1: s.baseline_seconds, y0: 0, y1: 1,
+                    fillcolor: css("--band"), line: { width: 0 }, layer: "below" });
+      annotations.push({ xref: "x", yref: "paper", x: s.baseline_seconds / 2, y: 1, yanchor: "top", showarrow: false,
+                         text: "learning normal", font: { size: 11, color: css("--muted") } });
+    }
+    return { shapes, annotations };
   }
 
-  // ---------- status + tiles ----------
-  function renderSummary(s) {
-    state.summary = s;
-    state.t0 = s.capture_start;
+  // ------------------------------------------------------------------ status, verdict, tiles
+  const ICONS = {
+    ok: '<svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.6-7 9-4-1.4-7-4.5-7-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>',
+    high: '<svg viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5"/><circle cx="12" cy="17.3" r=".5"/></svg>',
+    medium: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5"/><circle cx="12" cy="16.3" r=".5"/></svg>',
+    learning: '<svg viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0M6 12.5a9 9 0 0 1 12 0M9.5 16a4 4 0 0 1 5 0"/><circle cx="12" cy="19" r=".8"/></svg>',
+    error: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/></svg>',
+  };
+
+  function renderStatus(s) {
     const st = s.status || {};
-    const modeText = st.mode === "replay" ? `Replay ×${st.speed || "max"}`
-      : st.mode === "live" ? "Live capture" : "Database";
-    const clock = s.capture_end != null && s.capture_start != null
-      ? `capture t+${Math.round(s.capture_end - s.capture_start)}s` : "no frames yet";
+    const mode = st.mode === "replay" ? `Replay ×${st.speed || "max"}` : st.mode === "live" ? "Live capture" : "Saved data";
+    const clock = s.capture_end != null && s.capture_start != null ? `capture t+${Math.round(s.capture_end - s.capture_start)}s` : "no frames yet";
     $("status").innerHTML =
-      `<span class="pill"><i class="dot ${esc(st.state)}"></i>${esc(modeText)} · ${esc(st.state || "")}</span>` +
+      `<span class="pill"><i class="dot ${esc(st.state)}"></i>${esc(mode)} · ${esc(st.state || "")}</span>` +
       `<span class="mono">${esc(st.source || "")}</span><span>${esc(clock)}</span>` +
       (st.hopping ? `<span>${esc(st.hopping)}</span>` : "") +
-      (st.save_pcap ? `<span>recording to <span class="mono">${esc(st.save_pcap)}</span></span>` : "");
+      (st.save_pcap ? `<span>recording → <span class="mono">${esc(st.save_pcap)}</span></span>` : "");
+  }
 
+  function renderVerdict(s) {
+    const st = s.status || {};
+    const v = $("verdict"), prog = $("baseline-progress");
+    let cls, title, sub, actions = "";
+    prog.hidden = true;
+    if (st.state === "error") {
+      cls = "error"; title = "Live capture could not start"; sub = st.message;
+    } else if (s.capture_start == null) {
+      cls = "learning"; title = "Waiting for Wi-Fi beacons…";
+      sub = "Nothing has been heard yet. Live capture needs a monitor-mode adapter on Linux.";
+    } else if (!s.baseline_complete) {
+      const done = Math.max(0, s.capture_end - s.capture_start);
+      cls = "learning"; title = "Learning what normal looks like";
+      sub = `${Math.round(done)} of ${Math.round(s.baseline_seconds)} s. GhostAP first watches every network so it can spot what changes later. ${s.aps} access points heard so far.`;
+      prog.hidden = false;
+      prog.firstElementChild.style.width = Math.min(100, (100 * done) / s.baseline_seconds) + "%";
+    } else if (s.top_alert && s.top_alert.level === "HIGH") {
+      const a = s.top_alert, why = topReasonNames(a.reasons).slice(0, 3);
+      cls = "high"; title = `Evil twin suspected on “${a.ssid}”`;
+      sub = `Access point ${a.bssid} scores ${fmt(a.score, 0)}/100${why.length ? ": " + why.join(", ") : ""}.` +
+        (s.alerts.HIGH + s.alerts.MEDIUM > 1 ? ` ${s.alerts.HIGH + s.alerts.MEDIUM} alerts in total.` : "");
+      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">Inspect</button>`;
+    } else if (s.top_alert) {
+      const a = s.top_alert, why = topReasonNames(a.reasons).slice(0, 2);
+      cls = "medium"; title = `Suspicious access point on “${a.ssid}”`;
+      sub = `${a.bssid} scores ${fmt(a.score, 0)}/100${why.length ? " (" + why.join(", ") + ")" : ""}. Worth a look.`;
+      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">Inspect</button>`;
+    } else {
+      cls = "ok"; title = `All clear: ${s.aps} access point${s.aps === 1 ? "" : "s"} on ${s.networks} network${s.networks === 1 ? "" : "s"} look normal`;
+      sub = s.baseline_alerts
+        ? `A name-only check would have raised ${s.baseline_alerts} alarm${s.baseline_alerts === 1 ? "" : "s"} here, because some networks have several access points.`
+        : "No network name is shared between access points.";
+    }
+    actions += `<button class="btn" data-help>How it works</button>`;
+    v.className = "verdict " + cls;
+    $("verdict-icon").innerHTML = ICONS[cls] || ICONS.ok;
+    $("verdict-title").textContent = title;
+    $("verdict-sub").textContent = sub;
+    $("verdict-actions").innerHTML = actions;
+  }
+
+  function renderTiles(s) {
+    $("t-networks").textContent = s.networks;
     $("t-aps").textContent = s.aps;
-    $("t-frames").textContent = Number(s.frames).toLocaleString();
+    $("t-frames").textContent = Number(s.frames).toLocaleString() + " beacons heard";
     $("t-high").textContent = s.alerts.HIGH;
     $("t-medium").textContent = s.alerts.MEDIUM;
     $("t-base").textContent = s.baseline_alerts;
+    document.querySelector(".tile-high").classList.toggle("hot", s.alerts.HIGH > 0);
+    document.querySelector(".tile-med").classList.toggle("hot", s.alerts.MEDIUM > 0);
+    const c = $("c-alerts");
+    c.textContent = s.alerts.HIGH + s.alerts.MEDIUM || "";
+    c.classList.toggle("hot", s.alerts.HIGH > 0);
+    $("c-baseline").textContent = s.baseline_alerts || "";
+    $("help-baseline").textContent = Math.round(s.baseline_seconds / 60);
+    $("help-med").textContent = s.thresholds.medium;
+    $("help-high").textContent = s.thresholds.high;
+    document.title = (s.alerts.HIGH ? `(${s.alerts.HIGH}) ` : "") + "GhostAP Dashboard";
+  }
 
-    const banner = $("baseline-banner");
-    banner.classList.remove("error");
-    if (st.state === "error") {
-      banner.hidden = false;
-      banner.classList.add("error");
-      banner.textContent = st.message;
-    } else if (s.capture_start == null) {
-      banner.hidden = false;
-      banner.textContent = "Waiting for beacon frames…";
-    } else if (!s.baseline_complete) {
-      const done = Math.max(0, Math.round(s.capture_end - s.capture_start));
-      banner.hidden = false;
-      banner.textContent = `Learning the baseline: ${done} of ${Math.round(s.baseline_seconds)} s. ` +
-        "Risk scoring starts once the baseline window is complete.";
+  // ------------------------------------------------------------------ side panel
+  const HINTS = {
+    alerts: "Access points GhostAP finds suspicious, highest risk first.",
+    networks: "Access points grouped by network name. An evil twin shows up as an extra entry under a real network.",
+    baseline: "For comparison: the simple check that flags every access point whose name is shared. Most of these are normal.",
+  };
+  function renderSide() {
+    $("side-hint").textContent = HINTS[state.tab];
+    $("c-networks").textContent = state.networks.length || "";
+    const el = $("side-list");
+    if (state.tab === "alerts") {
+      if (!state.ghost.length) {
+        const learning = state.summary && !state.summary.baseline_complete;
+        el.innerHTML = `<div class="empty">${learning ? "Alerts appear once the learning period is over." : "No alerts. Every access point looks consistent with what was learned."}</div>`;
+        return;
+      }
+      el.innerHTML = state.ghost.map((a) => `
+        <button class="item ${isSel(a) ? "selected" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
+          ${lvl(a.level)}<span class="who">${esc(a.ssid)}</span><span class="score">${fmt(a.score, 0)}</span>
+          <span class="sub"><span class="mono">${esc(a.bssid)}</span>· first ${rel(a.first_ts)} ${triageTag(a.triage_status)}</span>
+        </button>`).join("");
+    } else if (state.tab === "networks") {
+      el.innerHTML = state.networks.length ? state.networks.map((n) => {
+        const hot = n.aps.some((a) => a.alert_id);
+        return `<div class="net ${hot ? "hot" : ""}">
+          <div class="net-head"><b>${esc(n.ssid)}</b>
+            <span class="net-meta">${n.aps.length} AP${n.aps.length > 1 ? "s" : ""} · ${esc(n.securities.join(", "))} · ch ${esc(n.channels.join(", "))}</span></div>
+          ${n.aps.map((a) => `
+            <button class="net-ap ${isSel(a) ? "selected" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
+              ${lvl(a.level)}
+              <span class="addr"><span class="mono">${esc(a.bssid)}</span>
+                <small>ch ${esc(a.channels)} · ${esc(a.securities)} · ${a.in_baseline ? "known" : "appeared " + rel(a.first_seen)}</small></span>
+              ${riskbar(a.score, a.level)}
+            </button>`).join("")}
+        </div>`;
+      }).join("") : '<div class="empty">No networks heard yet.</div>';
     } else {
-      banner.hidden = true;
+      const ghostKeys = new Set(state.ghost.map(keyOf));
+      el.innerHTML = state.base.length ? state.base.map((a) => `
+        <button class="item ${isSel(a) ? "selected" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
+          <span class="lvl"><i class="lvl-icon"></i>flag</span><span class="who">${esc(a.ssid)}</span>
+          <span>${ghostKeys.has(keyOf(a)) ? '<span class="tag triage-confirmed">GhostAP agrees</span>' : '<span class="tag">GhostAP: normal</span>'}</span>
+          <span class="sub"><span class="mono">${esc(a.bssid)}</span>· flagged ${rel(a.first_ts)}</span>
+        </button>`).join("") : '<div class="empty">No network name is shared between access points.</div>';
     }
   }
-
-  // ---------- alert list ----------
-  function renderAlerts(alerts) {
-    $("detector-hint").textContent = state.detector === "ghostap"
-      ? "Multi-indicator weighted risk with temporal smoothing."
-      : "Comparison baseline: flags every BSSID whose SSID is advertised by more than one BSSID.";
-    const ul = $("alert-list");
-    if (!alerts.length) {
-      ul.innerHTML = `<li class="empty">No alerts${state.detector === "ghostap" ? ": all access points look normal" : ""}.</li>`;
-      return;
-    }
-    if (state.selected == null || !alerts.some((a) => a.id === state.selected)) {
-      if (state.detector === "ghostap" || state.selected == null) select(alerts[0].id, false);
-    }
-    ul.innerHTML = alerts.map((a) => `
-      <li><button class="alert-item ${a.id === state.selected ? "selected" : ""}" data-id="${a.id}">
-        ${level(a.level)}
-        <span class="who">${esc(a.ssid)}</span>
-        <span class="score">${fmt(a.score, 0)}</span>
-        <span class="sub mono">${esc(a.bssid)} · first ${rel(a.first_ts)}${a.high_ts != null && a.high_ts !== a.first_ts ? " · HIGH " + rel(a.high_ts) : ""}</span>
-      </button></li>`).join("");
-  }
-
-  $("alert-list").addEventListener("click", (e) => {
-    const b = e.target.closest(".alert-item");
-    if (b) select(Number(b.dataset.id), true);
+  $("side-list").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-bssid]");
+    if (b) select(b.dataset.ssid, b.dataset.bssid, true);
   });
-
-  document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((x) => {
-      x.classList.toggle("active", x === t);
-      x.setAttribute("aria-selected", x === t);
+  function setTab(tab) {
+    state.tab = tab;
+    document.querySelectorAll(".tab").forEach((t) => {
+      t.classList.toggle("active", t.dataset.tab === tab);
+      t.setAttribute("aria-selected", t.dataset.tab === tab);
     });
-    state.detector = t.dataset.detector;
-    state.selected = null;
-    delete state.lastJSON.alerts;
-    refresh();
+    renderSide();
+  }
+  document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => setTab(t.dataset.tab)));
+  document.querySelectorAll(".tile").forEach((t) => t.addEventListener("click", () => {
+    const go = t.dataset.go;
+    if (go === "table") { $("table-card").scrollIntoView({ block: "start" }); $("ap-search").focus({ preventScroll: true }); return; }
+    setTab(go);
+    document.querySelector(".side").scrollIntoView({ block: "nearest" });
   }));
 
-  function select(id, user) {
-    state.selected = id;
-    document.querySelectorAll(".alert-item").forEach((b) =>
-      b.classList.toggle("selected", Number(b.dataset.id) === id));
-    delete state.lastJSON.detail;
+  // ------------------------------------------------------------------ selection
+  function select(ssid, bssid, user) {
+    state.sel = { ssid, bssid };
+    try { history.replaceState(null, "", "#ap=" + encodeURIComponent(ssid) + "|" + encodeURIComponent(bssid)); } catch (e) { /* ignore */ }
+    renderSide();
+    renderTable();
+    if (state.series.length) renderTimeline();
+    delete state.last.detail;
     loadDetail();
-    if (user) $("detail").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (user && window.matchMedia("(max-width: 900px)").matches) $("detail").scrollIntoView({ block: "start" });
   }
 
-  // ---------- alert detail ----------
+  // ------------------------------------------------------------------ detail
   async function loadDetail() {
-    if (state.selected == null) return;
-    let a;
-    try { a = await get("/api/alerts/" + state.selected); } catch (e) { return; }
-    if (!changed("detail", a)) return;
-    const p = a.profile || {};
-    const ind = a.indicators.slice().sort((x, y) => y.contribution - x.contribution);
-    $("detail").innerHTML = `
-      <div class="detail-head">
+    if (!state.sel) return;
+    let d;
+    try {
+      d = await get(`/api/ap?ssid=${encodeURIComponent(state.sel.ssid)}&bssid=${encodeURIComponent(state.sel.bssid)}`);
+    } catch (e) { return; }
+    if (!isSel(d.ap)) return;                       // selection changed meanwhile
+    if (!changed("detail", [d, state.summary && state.summary.thresholds])) return;
+    renderDetail(d);
+  }
+
+  function gauge(score, level, caption) {
+    const s = Math.max(0, Math.min(100, score || 0));
+    const R = 70, cx = 85, cy = 84;
+    const pt = (v) => {
+      const a = Math.PI * (1 - v / 100);
+      return [cx + R * Math.cos(a), cy - R * Math.sin(a)];
+    };
+    const arc = (a, b, color, w) => {
+      const [x1, y1] = pt(a), [x2, y2] = pt(b);
+      return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)} A${R} ${R} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" fill="none" stroke="${color}" stroke-width="${w}" stroke-linecap="butt"/>`;
+    };
+    const t = th(), col = level === "HIGH" ? css("--critical") : level === "MEDIUM" ? css("--serious") : css("--good");
+    return `<div class="gauge" role="img" aria-label="Risk ${fmt(score, 0)} of 100, ${esc(level || "")}">
+      <svg viewBox="0 0 170 98">
+        ${arc(0, t.medium, css("--good-soft"), 12)}${arc(t.medium, t.high, css("--serious-soft"), 12)}${arc(t.high, 100, css("--critical-soft"), 12)}
+        ${s > 0.5 ? arc(0, s, col, 12) : ""}
+        <text x="85" y="78" text-anchor="middle" class="g-num">${fmt(score, 0)}</text>
+        <text x="85" y="95" text-anchor="middle" class="g-cap">${esc(caption)}</text>
+      </svg>${lvl(level)}</div>`;
+  }
+
+  function comparison(ap, sibs) {
+    if (!sibs.length) {
+      return `<p class="muted">This is the only access point using the name “${esc(ap.ssid)}”, so there is nothing to compare it with. GhostAP still checks its security, uptime and behaviour over time.</p>`;
+    }
+    const known = sibs.filter((x) => x.in_baseline);
+    // An AP that was there while GhostAP learned the network is itself part of "normal".
+    const ref = ap.in_baseline ? [ap, ...known] : known.length ? known : sibs;
+    const cols = [...known, ...sibs.filter((x) => !x.in_baseline)].slice(0, 3);
+    const upAt = (x) => (x.uptime_first_seen == null ? null
+      : x.first_seen <= ap.first_seen ? x.uptime_first_seen + (ap.first_seen - x.first_seen) : x.uptime_first_seen);
+    const rows = [
+      ["Vendor (first half of address)", (x) => x.oui, (x) => x.oui],
+      ["Channel", (x) => x.channels, (x) => x.channels],
+      ["Security", (x) => x.securities, (x) => x.securities],
+      ["Signal", (x) => (x.rssi_avg == null ? "–" : fmt(x.rssi_avg, 0) + " dBm"), null,
+        (me, r) => me.rssi_avg != null && r.every((x) => x.rssi_avg != null && me.rssi_avg > x.rssi_avg + 6)],
+      ["Uptime when this AP appeared", (x) => uptime(x === ap ? ap.uptime_first_seen : upAt(x)), null,
+        (me, r) => me.uptime_first_seen != null && r.some((x) => upAt(x) != null) &&
+          me.uptime_first_seen < 0.1 * Math.max(...r.map((x) => upAt(x) || 0))],
+      ["Beacon fingerprint", (x) => (x.fingerprints || []).join(", ") || "–", null,
+        (me, r) => (me.fingerprints || []).length > 0 && !r.some((x) => (x.fingerprints || []).some((f) => me.fingerprints.includes(f)))],
+      ["Beacon interval", (x) => (x.beacon_interval == null ? "–" : x.beacon_interval + " TU"), (x) => x.beacon_interval],
+      ["First seen", (x) => rel(x.first_seen) + (x.in_baseline ? " (while learning)" : ""), null, (me) => !me.in_baseline],
+    ];
+    const body = rows.map(([name, show, val, diffFn]) => {
+      let diff;
+      if (diffFn) diff = diffFn(ap, ref);
+      else { const refVals = new Set(ref.map(val)); diff = !refVals.has(val(ap)); }
+      return `<tr><td class="attr">${esc(name)}</td>
+        <td class="me ${diff ? "diff" : "same"}" title="${diff ? "differs from the network's known access points" : "matches the network's known access points"}">${esc(show(ap))}</td>
+        ${cols.map((x) => `<td>${esc(show(x))}</td>`).join("")}</tr>`;
+    }).join("");
+    const more = sibs.length - cols.length;
+    return `<div class="table-wrap"><table class="cmp">
+      <thead><tr><th></th><th class="me"><span class="colhead">This access point<small class="mono">${esc(ap.bssid)}</small></span></th>
+      ${cols.map((x) => `<th><span class="colhead">${x.in_baseline ? "Known AP" : "Other new AP"}<small class="mono">${esc(x.bssid)}</small></span></th>`).join("")}</tr></thead>
+      <tbody>${body}</tbody></table></div>
+      <p class="cmp-legend"><b style="color:var(--critical)">≠</b> differs from every access point known for “${esc(ap.ssid)}” · <b style="color:var(--good)">=</b> matches${more > 0 ? ` · ${more} more access point${more > 1 ? "s" : ""} not shown` : ""}</p>`;
+  }
+
+  function indicatorRows(inds) {
+    const w = state.summary ? state.summary.weights : {};
+    const total = Object.values(w).reduce((a, b) => a + b, 0) || 1;
+    return inds.slice().sort((a, b) => b.contribution - a.contribution).map((c) => {
+      const info = IND[c.name] || { label: c.name, long: "" };
+      const max = ((c.weight || 0) / total) * 100;
+      return `<details class="ind ${c.contribution > 0 ? "" : "zero"}">
+        <summary>
+          <svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5"/></svg>
+          <span class="name">${esc(info.label)}</span>
+          <span class="bar" title="${fmt(c.contribution)} of a possible ${fmt(max)} points"><div style="width:${Math.min(100, (c.value || 0) * 100)}%"></div></span>
+          <span class="pts">${c.contribution > 0 ? "+" + fmt(c.contribution) : "0"}</span>
+        </summary>
+        <div class="body">
+          <p><b>Finding:</b> ${esc(c.reason)}</p>
+          <p>${esc(info.long)}</p>
+          <p class="math">value ${fmt(c.value, 2)} × weight ${fmt(c.weight)} → ${fmt(c.contribution)} of 100 points (max ${fmt(max)})</p>
+        </div>
+      </details>`;
+    }).join("");
+  }
+
+  function renderDetail(d) {
+    const ap = d.ap, alert = d.alert, latest = d.latest;
+    const score = alert ? alert.score : latest ? latest.score : null;
+    const level = alert ? alert.level : latest ? latest.level : null;
+    const inds = (alert && alert.indicators && alert.indicators.length ? alert.indicators : latest ? latest.indicators : []) || [];
+    const hits = inds.filter((c) => c.contribution > 0).sort((a, b) => b.contribution - a.contribution);
+    const whatIs = level === "HIGH" ? "Likely an evil twin." : level === "MEDIUM" ? "Suspicious, worth checking." : level === "LOW" ? "Looks normal." : "Not scored yet.";
+    const whyList = hits.slice(0, 3).map((c) => `<li><b style="display:inline">${esc(label(c.name))}:</b> ${esc(c.reason)}</li>`).join("");
+    const tags = [
+      ap.in_baseline ? '<span class="tag">present while learning</span>' : `<span class="tag new">new: appeared ${rel(ap.first_seen)}</span>`,
+      ap.allowlisted ? '<span class="tag">on allow-list</span>' : "",
+      alert ? triageTag(alert.triage_status) : "",
+      d.baseline_alert ? '<span class="tag" title="The name-only check flags every AP whose name is shared">name-only check: flagged</span>' : "",
+    ].join("");
+
+    let html = `
+      <div class="d-head">
         <div>
-          <h2>${esc(a.ssid)} <span class="mono muted">${esc(a.bssid)}</span></h2>
-          <div class="facts">
-            <span>Detector <b>${a.detector === "ghostap" ? "GhostAP" : "Baseline"}</b></span>
-            <span>First alert <b>${rel(a.first_ts)}</b></span>
-            <span>Reached HIGH <b>${rel(a.high_ts)}</b></span>
-            <span>Peak at <b>${rel(a.peak_ts)}</b></span>
-            <span>Channel <b>${esc(p.channels || "–")}</b></span>
-            <span>Security <b>${esc(p.securities || "–")}</b></span>
-            <span>RSSI <b>${fmt(p.rssi_avg, 0)} dBm</b></span>
+          <h2 class="d-title">${esc(ap.ssid)} <span class="mono muted">${esc(ap.bssid)}</span></h2>
+          <div class="d-tags">${tags}</div>
+          <div class="why ${esc(level || "")}"><b>${esc(whatIs)}</b>
+            ${hits.length ? `<span class="muted">${alert ? "At its peak (" + rel(alert.peak_ts) + ") the main reasons were:" : "What raised the score:"}</span><ul>${whyList}</ul>`
+              : `<span class="muted">${inds.length ? "None of the eight checks found anything unusual about this access point." : "Scoring starts after the learning period."}</span>`}
           </div>
         </div>
-        <div style="text-align:right">
-          <div class="big">${fmt(a.score, 1)}</div>
-          ${level(a.level)} <span class="muted">peak risk</span>
-        </div>
+        ${gauge(score, level, alert ? "peak risk" : "risk now")}
       </div>
+
+      <div class="section-title"><h3>Compared with the network's known access points</h3><span class="muted">what an analyst would check first</span></div>
+      ${comparison(ap, d.siblings || [])}
+
       <div class="two">
         <div>
-          <h3>Contribution of each indicator to the risk score (points)</h3>
-          <div id="contrib-chart" class="chart"></div>
+          <div class="section-title"><h3>${alert ? "Why it was flagged" : "What GhostAP checked"}</h3><span class="muted">click a row to see why</span></div>
+          ${inds.length ? indicatorRows(inds) : '<p class="muted">No indicator results yet.</p>'}
         </div>
         <div>
-          <h3>Risk score of this access point over time</h3>
+          <div class="section-title"><h3>Risk of this access point over time</h3></div>
           <div id="ap-chart" class="chart"></div>
         </div>
-      </div>
-      <h3>Indicators at peak</h3>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Indicator</th><th class="num">Value</th><th class="num">Weight</th><th class="num">Points</th><th>Reason</th></tr></thead>
-        <tbody>${ind.map((c) => `
-          <tr class="${c.contribution > 0 ? "" : "zero"}">
-            <td>${esc(LABELS[c.name] || c.name)}</td>
-            <td class="num">${fmt(c.value, 2)}</td>
-            <td class="num">${fmt(c.weight, 1)}</td>
-            <td class="num">${c.contribution > 0 ? "+" + fmt(c.contribution, 1) : "0"}</td>
-            <td class="reason">${esc(c.reason)}</td>
-          </tr>`).join("")}</tbody>
-      </table></div>
-      <h3>Possible benign causes to rule out</h3>
-      <ul class="benign">${(a.benign_causes || []).map((b) => `<li>${esc(b)}</li>`).join("") || "<li>none</li>"}</ul>`;
+      </div>`;
 
-    // Contribution bars: one series, one color; labels only on non-zero bars.
-    const bars = ind.slice().reverse();
-    Plotly.react("contrib-chart", [{
-      type: "bar", orientation: "h",
-      x: bars.map((c) => c.contribution),
-      y: bars.map((c) => LABELS[c.name] || c.name),
-      marker: { color: css("--s1") },
-      text: bars.map((c) => (c.contribution > 0 ? "+" + c.contribution.toFixed(1) : "")),
-      textposition: "outside", cliponaxis: false,
-      textfont: { color: css("--text-2") },
-      customdata: bars.map((c) => [c.value, c.weight, c.reason]),
-      hovertemplate: "<b>%{y}</b><br>+%{x:.1f} points (value %{customdata[0]:.2f} × weight %{customdata[1]})<br>%{customdata[2]}<extra></extra>",
-    }], baseLayout({
-      margin: { l: 130, r: 40, t: 4, b: 30 },
-      barcornerradius: 4, bargap: 0.35,
-      xaxis: { gridcolor: css("--grid"), zeroline: false, rangemode: "tozero", tickfont: { color: css("--muted") } },
-      yaxis: { automargin: true, tickfont: { color: css("--text-2") } },
-    }), PLOT_CFG);
-
-    // AP risk line: smoothed (accent) vs raw (muted).
-    const tl = a.timeline || [];
-    const x = tl.map((r) => r.ts - state.t0);
-    const th = thresholdShapes();
-    Plotly.react("ap-chart", [
-      { x, y: tl.map((r) => r.raw_score), name: "Raw score", mode: "lines",
-        line: { color: css("--muted"), width: 1, dash: "dot" }, hovertemplate: "raw %{y:.1f}<extra></extra>" },
-      { x, y: tl.map((r) => r.score), name: "Smoothed score", mode: "lines",
-        line: { color: css("--s1"), width: 2 }, hovertemplate: "smoothed %{y:.1f}<extra></extra>" },
-    ], baseLayout({
-      showlegend: true, legend: { orientation: "h", y: 1.12, x: 0, font: { color: css("--text-2") } },
-      hovermode: "x unified",
-      margin: { l: 36, r: 12, t: 24, b: 36 },
-      xaxis: { title: { text: "capture time (s)", font: { size: 11, color: css("--muted") } },
-               gridcolor: css("--grid"), zeroline: false, tickfont: { color: css("--muted") } },
-      yaxis: { range: [0, 100], gridcolor: css("--grid"), zeroline: false, tickfont: { color: css("--muted") } },
-      shapes: th.shapes, annotations: th.annotations,
-    }), PLOT_CFG);
-  }
-
-  // ---------- timeline + events ----------
-  function renderTimeline(series, events) {
-    if (!series.length) {
-      Plotly.purge("timeline-chart");
-      $("timeline-chart").innerHTML = '<div class="empty">The risk timeline appears once the baseline is learned.</div>';
-    } else {
-      const placeholder = $("timeline-chart").querySelector(".empty");
-      if (placeholder) placeholder.remove();
-      // Assign colors by first appearance, so a color always follows the same AP.
-      series.slice().sort((a, b) => a.ts[0] - b.ts[0] || key(a).localeCompare(key(b)))
-        .forEach((s) => colorFor(key(s)));
-      const traces = [];
-      let otherShown = false;
-      series.forEach((s) => {
-        const k = key(s);
-        const isOther = state.colorOf.get(k) >= SLOTS;
-        traces.push({
-          x: s.ts.map((t) => t - state.t0), y: s.score, mode: "lines",
-          name: isOther ? "Other APs" : esc(`${s.ssid} ${s.bssid}`),
-          legendgroup: isOther ? "other" : k,
-          showlegend: !isOther || !otherShown,
-          line: { color: colorFor(k), width: isOther ? 1 : 2 },
-          hovertemplate: `${esc(s.ssid)} ${esc(s.bssid)}: %{y:.1f}<extra></extra>`,
-        });
-        if (isOther) otherShown = true;
-      });
-      // Alert markers on the line where they fired.
-      const marks = events.filter((e) => e.type === "alert" || e.type === "escalated");
-      const scoreAt = (e) => {
-        const s = series.find((x) => x.ssid === e.ssid && x.bssid === e.bssid);
-        if (!s) return null;
-        const i = s.ts.indexOf(e.ts);
-        return i >= 0 ? s.score[i] : null;
-      };
-      if (marks.length) {
-        traces.push({
-          x: marks.map((e) => e.ts - state.t0), y: marks.map(scoreAt), mode: "markers",
-          name: "Alert events", showlegend: true,
-          marker: { size: 10, symbol: marks.map((e) => (e.type === "escalated" ? "triangle-up" : "diamond")),
-                    color: marks.map((e) => colorFor(key(e))), line: { color: css("--surface"), width: 2 } },
-          text: marks.map((e) => `${esc(e.text)}: ${esc(e.ssid)} ${esc(e.bssid)}`),
-          hovertemplate: "%{text}<extra></extra>",
-        });
-      }
-      const th = thresholdShapes();
-      const s = state.summary;
-      const shapes = th.shapes.slice();
-      const annotations = th.annotations.slice();
-      if (s && s.baseline_seconds) {
-        shapes.push({ type: "rect", xref: "x", yref: "paper", x0: 0, x1: s.baseline_seconds, y0: 0, y1: 1,
-                      fillcolor: css("--band"), line: { width: 0 }, layer: "below" });
-        annotations.push({ xref: "x", yref: "paper", x: s.baseline_seconds / 2, y: 1, yanchor: "top",
-                           showarrow: false, text: "learning baseline", font: { size: 11, color: css("--muted") } });
-      }
-      const xmax = s && s.capture_end != null ? s.capture_end - s.capture_start : undefined;
-      Plotly.react("timeline-chart", traces, baseLayout({
-        showlegend: true,
-        legend: { orientation: "h", y: -0.2, x: 0, font: { color: css("--text-2") } },
-        hovermode: "x unified",
-        margin: { l: 40, r: 16, t: 8, b: 40 },
-        xaxis: { range: [0, xmax], title: { text: "capture time (s)", font: { size: 11, color: css("--muted") } },
-                 gridcolor: css("--grid"), zeroline: false, tickfont: { color: css("--muted") } },
-        yaxis: { range: [0, 100], title: { text: "risk", font: { size: 11, color: css("--muted") } },
-                 gridcolor: css("--grid"), zeroline: false, tickfont: { color: css("--muted") } },
-        shapes, annotations,
-      }), PLOT_CFG);
+    if (alert) {
+      const ruled = new Set(JSON.parse(store.get("ghostap-ruleout-" + alert.id) || "[]"));
+      html += `
+      <div class="two">
+        <div>
+          <div class="section-title"><h3>Triage</h3><span class="muted">saved on the GhostAP server</span></div>
+          <div class="triage" data-alert="${alert.id}">
+            <div class="seg seg-grid" role="group" aria-label="Alert status">
+              ${TRIAGE.map(([k, n]) => `<button class="seg-btn ${alert.triage_status === k || (!alert.triage_status && k === "new") ? "active" : ""}" data-triage="${k}" aria-pressed="${alert.triage_status === k}">${esc(n)}</button>`).join("")}
+            </div>
+            <textarea id="triage-note" placeholder="Notes: who checked it, what you found…" maxlength="2000">${esc(alert.triage_note || "")}</textarea>
+            <div class="triage-row"><button class="btn primary" id="triage-save">Save</button>
+              <span class="saved" id="triage-saved">${alert.triage_ts ? "Last saved " + new Date(alert.triage_ts * 1000).toLocaleTimeString() : ""}</span></div>
+          </div>
+        </div>
+        <div>
+          <div class="section-title"><h3>Rule out innocent explanations</h3><span class="muted">tick what you have checked</span></div>
+          <ul class="checklist" data-alert="${alert.id}">
+            ${(alert.benign_causes || []).map((b, i) => `<li><label><input type="checkbox" data-i="${i}" ${ruled.has(i) ? "checked" : ""}><span>${esc(b)}</span></label></li>`).join("")}
+          </ul>
+        </div>
+      </div>`;
     }
-
-    const ul = $("events");
-    const shown = events.slice().reverse();
-    ul.innerHTML = shown.length ? shown.map((e) => `
-      <li class="${e.alert_id ? "link" : ""}" data-id="${e.alert_id || ""}" data-detector="${e.type === "baseline_alert" ? "baseline" : "ghostap"}">
-        <span class="t">${rel(e.ts)}</span>
-        <span>${e.level ? level(e.level) : '<span class="muted">info</span>'}</span>
-        <span class="what"><span class="swatch" style="background:${colorFor(key(e))}"></span>${esc(e.text)}: <b>${esc(e.ssid)}</b> <span class="mono muted">${esc(e.bssid)}</span></span>
-      </li>`).join("") : '<li class="empty">No events yet.</li>';
+    $("detail").innerHTML = html;
+    drawApChart(d, alert);
   }
 
-  $("events").addEventListener("click", (e) => {
-    const li = e.target.closest("li.link");
-    if (!li || !li.dataset.id) return;
-    const det = li.dataset.detector;
-    if (det !== state.detector) document.querySelector(`.tab[data-detector="${det}"]`).click();
-    select(Number(li.dataset.id), true);
+  function drawApChart(d, alert) {
+    const tl = d.timeline || [];
+    if (!tl.length) {
+      $("ap-chart").innerHTML = '<div class="empty">Appears once the learning period is over.</div>';
+      return;
+    }
+    const x = tl.map((r) => r.ts - state.t0);
+    const decor = thresholdDecor();
+    const traces = [
+      { x, y: tl.map((r) => r.raw_score), name: "Raw (each 10 s)", mode: "lines",
+        line: { color: css("--muted"), width: 1, dash: "dot" }, hovertemplate: "raw %{y:.1f}<extra></extra>" },
+      { x, y: tl.map((r) => r.score), name: "Smoothed (used for alerts)", mode: "lines",
+        line: { color: css("--s1"), width: 2.5 }, hovertemplate: "smoothed %{y:.1f}<extra></extra>" },
+    ];
+    if (alert) {
+      const pts = [[alert.first_ts, "alert raised", "diamond"], [alert.high_ts, "reached HIGH", "triangle-up"]].filter((p) => p[0] != null);
+      traces.push({ x: pts.map((p) => p[0] - state.t0), y: pts.map((p) => (tl.find((r) => r.ts === p[0]) || {}).score),
+        mode: "markers", name: "Alert", text: pts.map((p) => p[1]), hovertemplate: "%{text}<extra></extra>",
+        marker: { size: 11, symbol: pts.map((p) => p[2]), color: css("--critical"), line: { color: css("--surface"), width: 2 } } });
+    }
+    Plotly.react("ap-chart", traces, baseLayout({
+      showlegend: true, legend: { orientation: "h", y: -0.28, x: 0, font: { color: css("--text-2"), size: 11 } },
+      hovermode: "x unified", margin: { l: 36, r: 10, t: 8, b: 64 },
+      shapes: decor.shapes, annotations: decor.annotations,
+    }), PLOT_CFG);
+  }
+
+  // detail interactions (event delegation; survives re-render)
+  $("detail").addEventListener("click", async (e) => {
+    const tb = e.target.closest("[data-triage]");
+    if (tb) {
+      tb.parentElement.querySelectorAll(".seg-btn").forEach((b) => { b.classList.toggle("active", b === tb); b.setAttribute("aria-pressed", b === tb); });
+      return;
+    }
+    if (e.target.id === "triage-save") {
+      const box = e.target.closest(".triage");
+      const active = box.querySelector(".seg-btn.active");
+      const r = await fetch(`/api/alerts/${box.dataset.alert}/triage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: active ? active.dataset.triage : "new", note: $("triage-note").value }),
+      });
+      $("triage-saved").textContent = r.ok ? "Saved " + new Date().toLocaleTimeString() : "Could not save (" + r.status + ")";
+      delete state.last.ghost;
+      refresh(true);
+    }
+  });
+  $("detail").addEventListener("change", (e) => {
+    const list = e.target.closest(".checklist");
+    if (!list) return;
+    const ids = [...list.querySelectorAll("input:checked")].map((i) => Number(i.dataset.i));
+    store.set("ghostap-ruleout-" + list.dataset.alert, JSON.stringify(ids));
   });
 
-  // ---------- AP table ----------
-  function renderAps(aps) {
-    $("ap-rows").innerHTML = aps.length ? aps.map((p) => `
-      <tr class="${p.alert_id ? "clickable" : ""}" data-id="${p.alert_id || ""}">
-        <td><span class="swatch" style="background:${colorFor(key(p))}"></span>${esc(p.ssid)}</td>
+  // ------------------------------------------------------------------ timeline + events
+  function renderTimeline() {
+    const el = $("timeline-chart");
+    let series = state.series;
+    if (state.onlyAlerting) series = series.filter((s) => s.peak >= th().medium);
+    if (!state.series.length) {
+      Plotly.purge(el);
+      el.innerHTML = '<div class="empty">The risk timeline appears once the learning period is over.</div>';
+      return;
+    }
+    const ph = el.querySelector(".empty");
+    if (ph) ph.remove();
+    state.series.slice().sort((a, b) => a.ts[0] - b.ts[0] || keyOf(a).localeCompare(keyOf(b))).forEach((s) => colorFor(keyOf(s)));
+    const anySel = state.sel && series.some(isSel);
+    const traces = [];
+    let otherShown = false;
+    series.forEach((s) => {
+      const k = keyOf(s), other = state.colorOf.get(k) >= SLOTS, sel = isSel(s);
+      traces.push({
+        x: s.ts.map((t) => t - state.t0), y: state.scoreField === "raw" ? s.raw : s.score, mode: "lines",
+        name: other ? "Other APs" : esc(`${s.ssid} ${s.bssid}`), legendgroup: other ? "other" : k,
+        showlegend: !other || !otherShown,
+        opacity: anySel && !sel ? 0.35 : 1,
+        line: { color: colorFor(k), width: sel ? 4 : other ? 1 : 2 },
+        customdata: s.ts.map(() => [s.ssid, s.bssid]),
+        hovertemplate: `${esc(s.ssid)} ${esc(s.bssid)}: %{y:.1f}<extra></extra>`,
+      });
+      if (other) otherShown = true;
+    });
+    const marks = state.events.filter((e) => (e.type === "alert" || e.type === "escalated") && series.some((s) => s.ssid === e.ssid && s.bssid === e.bssid));
+    if (marks.length) {
+      const yAt = (e) => {
+        const s = series.find((x) => x.ssid === e.ssid && x.bssid === e.bssid);
+        const i = s ? s.ts.indexOf(e.ts) : -1;
+        return i >= 0 ? (state.scoreField === "raw" ? s.raw : s.score)[i] : null;
+      };
+      traces.push({
+        x: marks.map((e) => e.ts - state.t0), y: marks.map(yAt), mode: "markers", name: "Alert events",
+        customdata: marks.map((e) => [e.ssid, e.bssid]),
+        marker: { size: 11, symbol: marks.map((e) => (e.type === "escalated" ? "triangle-up" : "diamond")),
+                  color: marks.map((e) => colorFor(keyOf(e))), line: { color: css("--surface"), width: 2 } },
+        text: marks.map((e) => `${esc(e.text)}: ${esc(e.ssid)} ${esc(e.bssid)}`), hovertemplate: "%{text}<extra></extra>",
+      });
+    }
+    const decor = thresholdDecor(), s = state.summary;
+    Plotly.react(el, traces, baseLayout({
+      showlegend: true, legend: { orientation: "h", y: -0.22, x: 0, font: { color: css("--text-2") } },
+      hovermode: "closest", margin: { l: 40, r: 14, t: 8, b: 40 },
+      xaxis: Object.assign(baseLayout().xaxis, { range: [0, s && s.capture_end != null ? s.capture_end - s.capture_start : undefined] }),
+      yaxis: Object.assign(baseLayout().yaxis, { title: { text: state.scoreField === "raw" ? "raw risk" : "risk", font: { size: 11, color: css("--muted") } } }),
+      shapes: decor.shapes, annotations: decor.annotations, uirevision: "keep-zoom",
+    }), PLOT_CFG);
+    if (!state.plotBound) {
+      el.on("plotly_click", (ev) => {
+        const p = ev.points && ev.points[0];
+        if (p && p.customdata) select(p.customdata[0], p.customdata[1], true);
+      });
+      state.plotBound = true;
+    }
+  }
+  document.querySelectorAll("[data-score]").forEach((b) => b.addEventListener("click", () => {
+    state.scoreField = b.dataset.score;
+    document.querySelectorAll("[data-score]").forEach((x) => { x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", x === b); });
+    renderTimeline();
+  }));
+  $("only-alerting").addEventListener("change", (e) => { state.onlyAlerting = e.target.checked; renderTimeline(); });
+
+  function renderEvents() {
+    const f = state.evFilter;
+    const keep = (e) => f === "all" || (f === "alerts" && (e.type === "alert" || e.type === "escalated"))
+      || (f === "aps" && e.type === "ap_seen") || (f === "baseline" && e.type === "baseline_alert");
+    const shown = state.events.filter(keep).slice().reverse();
+    $("events").innerHTML = shown.length ? shown.map((e) => `
+      <li data-ssid="${esc(e.ssid)}" data-bssid="${esc(e.bssid)}" title="Inspect this access point">
+        <span class="t">${rel(e.ts)}</span>
+        <span>${e.type === "baseline_alert" ? '<span class="lvl"><i class="lvl-icon"></i>name-only</span>' : e.level ? lvl(e.level) : '<span class="muted">new AP</span>'}</span>
+        <span class="what"><span class="swatch" style="background:${colorFor(keyOf(e))}"></span>${esc(e.text)}: <b>${esc(e.ssid)}</b> <span class="mono muted">${esc(e.bssid)}</span></span>
+      </li>`).join("") : '<li class="empty">No events of this kind yet.</li>';
+  }
+  $("events").addEventListener("click", (e) => {
+    const li = e.target.closest("li[data-bssid]");
+    if (li) select(li.dataset.ssid, li.dataset.bssid, true);
+  });
+  document.querySelectorAll("[data-ev]").forEach((c) => c.addEventListener("click", () => {
+    state.evFilter = c.dataset.ev;
+    document.querySelectorAll("[data-ev]").forEach((x) => x.classList.toggle("active", x === c));
+    renderEvents();
+  }));
+
+  // ------------------------------------------------------------------ AP table
+  function renderTable() {
+    const q = state.search.trim().toLowerCase();
+    let rows = state.aps.filter((a) => !q || [a.ssid, a.bssid, a.securities, a.channels, a.level].join(" ").toLowerCase().includes(q));
+    const { key, dir } = state.sort;
+    rows = rows.slice().sort((a, b) => {
+      const x = a[key], y = b[key];
+      if (x == null && y == null) return 0;
+      if (x == null) return 1;
+      if (y == null) return -1;
+      return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * dir;
+    });
+    $("ap-rows").innerHTML = rows.length ? rows.map((p) => `
+      <tr class="${isSel(p) ? "selected" : ""}" data-ssid="${esc(p.ssid)}" data-bssid="${esc(p.bssid)}" tabindex="0">
+        <td><span class="swatch" style="background:${colorFor(keyOf(p))}"></span>${esc(p.ssid)}${p.in_baseline ? "" : ' <span class="tag new">new</span>'}</td>
         <td class="mono">${esc(p.bssid)}</td>
         <td class="num">${esc(p.channels)}</td>
         <td>${esc(p.securities)}</td>
-        <td class="num">${fmt(p.rssi_avg, 1)}</td>
-        <td class="num">${p.frames}</td>
+        <td class="num">${fmt(p.rssi_avg, 0)} dBm</td>
+        <td class="num">${Number(p.frames).toLocaleString()}</td>
         <td class="num">${rel(p.first_seen)}</td>
-        <td class="num">${fmt(p.score, 1)}</td>
-        <td class="num">${fmt(p.peak_score, 1)}</td>
-        <td>${level(p.level)}</td>
-      </tr>`).join("") : '<tr><td colspan="10" class="empty">No access points yet.</td></tr>';
+        <td class="num risk-col">${riskbar(p.score, p.level)}</td>
+        <td class="num">${fmt(p.peak_score, 0)}</td>
+        <td>${lvl(p.level)} ${triageTag(p.triage_status)}</td>
+      </tr>`).join("") : `<tr><td colspan="10" class="empty">${q ? "No access point matches “" + esc(state.search) + "”." : "No access points yet."}</td></tr>`;
   }
-
   $("ap-rows").addEventListener("click", (e) => {
-    const tr = e.target.closest("tr.clickable");
-    if (!tr) return;
-    if (state.detector !== "ghostap") document.querySelector('.tab[data-detector="ghostap"]').click();
-    select(Number(tr.dataset.id), true);
+    const tr = e.target.closest("tr[data-bssid]");
+    if (tr) select(tr.dataset.ssid, tr.dataset.bssid, true);
+  });
+  $("ap-rows").addEventListener("keydown", (e) => {
+    const tr = e.target.closest("tr[data-bssid]");
+    if (tr && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); select(tr.dataset.ssid, tr.dataset.bssid, true); }
+  });
+  $("ap-search").addEventListener("input", (e) => { state.search = e.target.value; renderTable(); });
+  document.querySelectorAll("th[data-sort]").forEach((h) => h.addEventListener("click", () => {
+    const k = h.dataset.sort;
+    state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : (["ssid", "bssid", "securities", "channels", "level"].includes(k) ? 1 : -1) };
+    document.querySelectorAll("th[data-sort]").forEach((x) => x.removeAttribute("aria-sort"));
+    h.setAttribute("aria-sort", state.sort.dir > 0 ? "ascending" : "descending");
+    renderTable();
+  }));
+
+  // ------------------------------------------------------------------ toasts
+  function notify(alerts) {
+    const now = new Map(alerts.map((a) => [a.id, a.level]));
+    if (state.known) {
+      alerts.forEach((a) => {
+        const before = state.known.get(a.id);
+        if (before === undefined || (before === "MEDIUM" && a.level === "HIGH")) toast(a, before === undefined);
+      });
+    }
+    state.known = now;
+  }
+  function toast(a, isNew) {
+    const t = document.createElement("div");
+    t.className = "toast " + a.level;
+    t.innerHTML = `<div>${lvl(a.level)} <b>${isNew ? "New alert" : "Escalated"}: ${esc(a.ssid)}</b></div>
+      <button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">Inspect</button>
+      <p><span class="mono">${esc(a.bssid)}</span> · risk ${fmt(a.score, 0)}</p>`;
+    $("toasts").appendChild(t);
+    setTimeout(() => t.remove(), 9000);
+  }
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-inspect]");
+    if (b) {
+      select(b.dataset.inspect, b.dataset.bssid, true);
+      const toastEl = b.closest(".toast");
+      if (toastEl) toastEl.remove();
+      if (!window.matchMedia("(max-width: 900px)").matches) $("detail").scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+    if (e.target.closest("[data-help]")) openHelp();
   });
 
-  // ---------- polling ----------
+  // ------------------------------------------------------------------ help, theme, keys
+  function openHelp() {
+    const w = state.summary ? state.summary.weights : {};
+    $("glossary").innerHTML = Object.keys(IND).filter((k) => k !== "duplicate_ssid").map((k) =>
+      `<dt>${esc(IND[k].label)} <span class="muted">(weight ${fmt(w[k])})</span></dt><dd>${esc(IND[k].long)}</dd>`).join("");
+    const dlg = $("help");
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
+  }
+  $("help-btn").addEventListener("click", openHelp);
+
+  function applyTheme(t) {
+    if (t) document.documentElement.setAttribute("data-theme", t);
+    else document.documentElement.removeAttribute("data-theme");
+  }
+  applyTheme(store.get("ghostap-theme"));
+  $("theme-btn").addEventListener("click", () => {
+    const dark = document.documentElement.getAttribute("data-theme") === "dark" ||
+      (!document.documentElement.getAttribute("data-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    const next = dark ? "light" : "dark";
+    applyTheme(next);
+    store.set("ghostap-theme", next);
+    rethemeCharts();
+  });
+  function rethemeCharts() {
+    state.last = {};
+    if (state.series.length) renderTimeline();
+    loadDetail();
+  }
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", rethemeCharts);
+
+  document.addEventListener("keydown", (e) => {
+    const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
+    if (e.key === "Escape" && typing) { document.activeElement.blur(); return; }
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "/") { e.preventDefault(); $("ap-search").focus(); $("table-card").scrollIntoView({ block: "start" }); }
+    else if (e.key === "?") { e.preventDefault(); openHelp(); }
+    else if (e.key === "j" || e.key === "k") {
+      const items = [...document.querySelectorAll("#side-list [data-bssid]")];
+      if (!items.length) return;
+      let i = items.findIndex((b) => b.classList.contains("selected"));
+      i = e.key === "j" ? Math.min(items.length - 1, i + 1) : Math.max(0, i < 0 ? 0 : i - 1);
+      items[i].focus();
+      select(items[i].dataset.ssid, items[i].dataset.bssid, false);
+    }
+  });
+
+  // ------------------------------------------------------------------ polling
   let timer = null;
-  async function refresh() {
+  async function refresh(once) {
     try {
-      const [summary, alerts, series, events, aps] = await Promise.all([
-        get("/api/summary"), get("/api/alerts?detector=" + state.detector),
-        get("/api/timeline"), get("/api/events"), get("/api/aps"),
+      const [summary, ghost, base, networks, series, events, aps] = await Promise.all([
+        get("/api/summary"), get("/api/alerts?detector=ghostap"), get("/api/alerts?detector=baseline"),
+        get("/api/networks"), get("/api/timeline"), get("/api/events"), get("/api/aps"),
       ]);
-      renderSummary(summary);
-      if (changed("timeline", [series, events, summary.capture_end])) renderTimeline(series, events);
-      if (changed("alerts", alerts)) renderAlerts(alerts);
-      if (changed("aps", aps)) renderAps(aps);
-      if (state.selected != null) loadDetail();
-      const live = summary.status && summary.status.state === "running";
-      schedule(live ? 2000 : 10000);
+      state.summary = summary;
+      state.t0 = summary.capture_start;
+      renderStatus(summary);
+      if (changed("verdict", [summary.top_alert, summary.alerts, summary.baseline_complete, summary.aps, summary.status.state,
+        summary.status.message, Math.round((summary.capture_end || 0) - (summary.capture_start || 0))])) renderVerdict(summary);
+      renderTiles(summary);
+      notify(ghost);
+      state.ghost = ghost; state.base = base; state.networks = networks; state.events = events; state.aps = aps; state.series = series;
+      if (changed("side", [ghost, base, networks, state.tab])) renderSide();
+      if (changed("timeline", [series, events, summary.capture_end])) renderTimeline();
+      if (changed("events", events)) renderEvents();
+      if (changed("aps", aps)) renderTable();
+      if (!state.sel) {
+        const m = /^#ap=([^|]*)\|(.+)$/.exec(location.hash);
+        if (m) select(decodeURIComponent(m[1]), decodeURIComponent(m[2]), false);
+        else if (ghost.length) select(ghost[0].ssid, ghost[0].bssid, false);
+      } else {
+        loadDetail();
+      }
+      if (!once) schedule(summary.status && summary.status.state === "running" ? 2000 : 10000);
     } catch (e) {
       $("status").innerHTML = '<span class="pill"><i class="dot error"></i>dashboard server not reachable</span>';
-      schedule(5000);
+      if (!once) schedule(5000);
     }
   }
-  function schedule(ms) { clearTimeout(timer); timer = setTimeout(refresh, ms); }
-
-  // Re-theme charts when the OS colour scheme changes.
-  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    state.lastJSON = {};
-    refresh();
-  });
-
-  refresh();
+  function schedule(ms) { clearTimeout(timer); timer = setTimeout(() => refresh(false), ms); }
+  refresh(false);
 })();

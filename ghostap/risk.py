@@ -159,6 +159,7 @@ def _summarise(contributions: List[dict]) -> Tuple[str, List[str]]:
 class RiskReport:
     timeline: List[dict] = field(default_factory=list)
     alerts: List[dict] = field(default_factory=list)
+    latest: List[dict] = field(default_factory=list)   # newest score + breakdown per AP
 
 
 class RiskEngine:
@@ -176,6 +177,7 @@ class RiskEngine:
         self._alerts: Dict[Tuple[str, str], dict] = {}
         self._next_grid: Optional[float] = None   # next regular evaluation time
         self._last_t: Optional[float] = None      # last evaluated time (grid or final)
+        self.latest: Dict[Tuple[str, str], dict] = {}
 
     @classmethod
     def from_db(cls, db_path: str, config: Optional[dict] = None) -> "RiskEngine":
@@ -219,6 +221,7 @@ class RiskEngine:
         elif self._next_grid is None and self.an.obs and self.an.obs[-1]["ts"] > self.an.baseline.end:
             self._next_grid = self.an.baseline.end + self.step
 
+        touched = set()
         for t in grid + ([partial] if partial is not None else []):
             self._last_t = t
             for key in self.an.aps():
@@ -235,10 +238,16 @@ class RiskEngine:
                 level = level_for(smoothed, self.thresholds)
                 report.timeline.append({"ts": t, "ssid": key[0], "bssid": key[1],
                                         "raw_score": raw, "score": smoothed, "level": level})
+                prev = self.latest.get(key)
+                self.latest[key] = {"ts": t, "ssid": key[0], "bssid": key[1], "raw_score": raw,
+                                    "score": smoothed, "level": level,
+                                    "indicators": contrib or (prev["indicators"] if prev else [])}
+                touched.add(key)
                 if level != LOW:
                     self._update_alert(alerts, key, t, smoothed, level, contrib)
 
         report.alerts = sorted(alerts.values(), key=lambda a: (-a["score"], a["first_ts"]))
+        report.latest = [self.latest[k] for k in sorted(touched)]
         return report
 
     @staticmethod

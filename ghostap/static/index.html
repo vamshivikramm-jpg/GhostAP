@@ -4,65 +4,117 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GhostAP Dashboard</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3c-6 0-10 4.5-10 10.5V28l3.3-2.5L12.7 28 16 25.5 19.3 28l3.4-2.5L26 28V13.5C26 7.5 22 3 16 3z' fill='%232a78d6'/%3E%3Ccircle cx='12.5' cy='14' r='2' fill='white'/%3E%3Ccircle cx='19.5' cy='14' r='2' fill='white'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/vendor/plotly.min.js"></script>
 </head>
 <body>
+  <a class="skip" href="#detail">Skip to details</a>
+
   <header class="topbar">
     <div class="brand">
-      <h1>GhostAP</h1>
-      <span class="tagline">Passive Evil Twin detector</span>
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c-6 0-10 4.5-10 10.5V28l3.3-2.5L12.7 28 16 25.5 19.3 28l3.4-2.5L26 28V13.5C26 7.5 22 3 16 3z"/><circle cx="12.5" cy="14" r="2"/><circle cx="19.5" cy="14" r="2"/></svg>
+      <div>
+        <h1>GhostAP</h1>
+        <span class="tagline">Passive Evil Twin detector</span>
+      </div>
     </div>
     <div class="status" id="status" aria-live="polite">connecting…</div>
+    <div class="top-actions">
+      <button class="icon-btn" id="help-btn" title="How GhostAP works (?)" aria-label="How GhostAP works">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.2-2.5 3.8"/><circle cx="12" cy="17.2" r=".6" class="fill"/></svg>
+        <span>How it works</span>
+      </button>
+      <button class="icon-btn" id="theme-btn" title="Switch light / dark" aria-label="Switch light or dark theme">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
   </header>
 
   <main>
-    <section class="tiles" aria-label="Summary">
-      <div class="tile"><span class="tile-label">Access points</span><span class="tile-value" id="t-aps">–</span></div>
-      <div class="tile"><span class="tile-label">Frames</span><span class="tile-value" id="t-frames">–</span></div>
-      <div class="tile"><span class="tile-label"><i class="lvl-icon HIGH"></i>HIGH alerts</span><span class="tile-value" id="t-high">–</span></div>
-      <div class="tile"><span class="tile-label"><i class="lvl-icon MEDIUM"></i>MEDIUM alerts</span><span class="tile-value" id="t-medium">–</span></div>
-      <div class="tile"><span class="tile-label">Baseline detector alerts</span><span class="tile-value" id="t-base">–</span></div>
+    <section class="verdict" id="verdict" aria-live="polite">
+      <div class="verdict-icon" id="verdict-icon"></div>
+      <div class="verdict-text">
+        <h2 id="verdict-title">Connecting to GhostAP…</h2>
+        <p id="verdict-sub"></p>
+        <div class="progress" id="baseline-progress" hidden><div></div></div>
+      </div>
+      <div class="verdict-actions" id="verdict-actions"></div>
     </section>
 
-    <div class="banner" id="baseline-banner" hidden></div>
+    <section class="tiles" aria-label="Summary">
+      <button class="tile" data-go="networks"><span class="tile-label">Networks</span><span class="tile-value" id="t-networks">–</span><span class="tile-sub">distinct names (SSIDs)</span></button>
+      <button class="tile" data-go="table"><span class="tile-label">Access points</span><span class="tile-value" id="t-aps">–</span><span class="tile-sub" id="t-frames">– beacons heard</span></button>
+      <button class="tile tile-high" data-go="alerts"><span class="tile-label"><i class="lvl-icon HIGH"></i>HIGH alerts</span><span class="tile-value" id="t-high">–</span><span class="tile-sub">likely evil twins</span></button>
+      <button class="tile tile-med" data-go="alerts"><span class="tile-label"><i class="lvl-icon MEDIUM"></i>MEDIUM alerts</span><span class="tile-value" id="t-medium">–</span><span class="tile-sub">suspicious, check them</span></button>
+      <button class="tile" data-go="baseline"><span class="tile-label">Name-only check</span><span class="tile-value" id="t-base">–</span><span class="tile-sub">would have alarmed</span></button>
+    </section>
 
     <section class="grid">
-      <div class="card alerts-card">
-        <div class="card-head">
-          <h2>Alerts <span class="muted">by risk</span></h2>
-          <div class="tabs" role="tablist">
-            <button role="tab" class="tab active" data-detector="ghostap" aria-selected="true">GhostAP</button>
-            <button role="tab" class="tab" data-detector="baseline" aria-selected="false">Baseline</button>
-          </div>
+      <div class="card side">
+        <div class="tabs" role="tablist" aria-label="Lists">
+          <button role="tab" class="tab active" id="tab-alerts" data-tab="alerts" aria-selected="true">Alerts <span class="count" id="c-alerts"></span></button>
+          <button role="tab" class="tab" id="tab-networks" data-tab="networks" aria-selected="false">Networks <span class="count" id="c-networks"></span></button>
+          <button role="tab" class="tab" id="tab-baseline" data-tab="baseline" aria-selected="false">Name-only <span class="count" id="c-baseline"></span></button>
         </div>
-        <p class="hint" id="detector-hint"></p>
-        <ul class="alert-list" id="alert-list"></ul>
+        <p class="hint" id="side-hint"></p>
+        <div class="side-list" id="side-list" role="tabpanel"></div>
+        <p class="kbd-hint">Tip: <kbd>j</kbd>/<kbd>k</kbd> move through the list, <kbd>/</kbd> searches access points, <kbd>?</kbd> opens help.</p>
       </div>
 
-      <div class="card detail-card" id="detail">
-        <div class="empty">Select an alert to see why it fired.</div>
-      </div>
+      <article class="card detail" id="detail" tabindex="-1" aria-live="polite">
+        <div class="empty big-empty">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="21" cy="21" r="12"/><path d="M30 30l9 9"/></svg>
+          <p><b>Select an access point to inspect it.</b></p>
+          <p>Click an alert, a network, a line on the timeline, or a row in the table.</p>
+        </div>
+      </article>
     </section>
 
-    <section class="card">
+    <section class="card" id="timeline-card">
       <div class="card-head">
-        <h2>Risk timeline <span class="muted">smoothed score per access point</span></h2>
+        <h2>Risk over time <span class="muted">smoothed score of every access point</span></h2>
+        <div class="controls">
+          <div class="seg" role="group" aria-label="Score type">
+            <button class="seg-btn active" data-score="score" aria-pressed="true">Smoothed</button>
+            <button class="seg-btn" data-score="raw" aria-pressed="false">Raw</button>
+          </div>
+          <label class="check"><input type="checkbox" id="only-alerting"> Only suspicious APs</label>
+        </div>
       </div>
       <div id="timeline-chart" class="chart chart-tall"></div>
-      <h3>Events</h3>
+      <p class="chart-hint">Click a line to inspect that access point · drag to zoom · double-click to reset</p>
+      <div class="events-head">
+        <h3>Events</h3>
+        <div class="chips" role="group" aria-label="Event filter">
+          <button class="chip active" data-ev="all">All</button>
+          <button class="chip" data-ev="alerts">Alerts</button>
+          <button class="chip" data-ev="aps">New access points</button>
+          <button class="chip" data-ev="baseline">Name-only check</button>
+        </div>
+      </div>
       <ul class="events" id="events"></ul>
     </section>
 
-    <section class="card">
-      <div class="card-head"><h2>Access points</h2></div>
+    <section class="card" id="table-card">
+      <div class="card-head">
+        <h2>All access points</h2>
+        <input type="search" id="ap-search" placeholder="Search name, BSSID, security…  ( / )" aria-label="Search access points">
+      </div>
       <div class="table-wrap">
         <table class="ap-table">
           <thead>
             <tr>
-              <th>SSID</th><th>BSSID</th><th class="num">CH</th><th>Security</th>
-              <th class="num">RSSI avg</th><th class="num">Frames</th><th class="num">First seen</th>
-              <th class="num">Risk now</th><th class="num">Peak</th><th>Level</th>
+              <th data-sort="ssid">Network</th>
+              <th data-sort="bssid">BSSID</th>
+              <th data-sort="channels" class="num">CH</th>
+              <th data-sort="securities">Security</th>
+              <th data-sort="rssi_avg" class="num">Signal</th>
+              <th data-sort="frames" class="num">Beacons</th>
+              <th data-sort="first_seen" class="num">First seen</th>
+              <th data-sort="score" class="num risk-col">Risk now</th>
+              <th data-sort="peak_score" class="num" aria-sort="descending">Peak</th>
+              <th data-sort="level">Level</th>
             </tr>
           </thead>
           <tbody id="ap-rows"></tbody>
@@ -71,7 +123,24 @@
     </section>
   </main>
 
-  <footer>Passive monitoring only: beacon and probe-response frames. Use only on networks you own or are authorised to monitor.</footer>
+  <footer>Passive monitoring only: GhostAP listens to beacon and probe-response frames and never transmits. Use it only on networks you own or are authorised to monitor.</footer>
+
+  <dialog id="help" aria-labelledby="help-title">
+    <form method="dialog" class="dialog-close"><button aria-label="Close">✕</button></form>
+    <h2 id="help-title">How GhostAP works</h2>
+    <ol class="steps">
+      <li><b>Listen.</b> Every Wi-Fi access point announces itself about ten times a second with a <i>beacon</i>: its name, its radio address (BSSID), channel, security, and how it is built. GhostAP only listens; it never sends anything.</li>
+      <li><b>Learn normal.</b> For the first <span id="help-baseline">2</span> minutes GhostAP learns what each network normally looks like: which access points it has, their vendors, channels, security, signal and uptime.</li>
+      <li><b>Look for differences.</b> After that, every access point is compared with what was learned, using eight indicators (below). Each gives a value from 0 to 1 and a reason.</li>
+      <li><b>Score and smooth.</b> The indicators are combined into a weighted risk score from 0 to 100, averaged over the last 30 seconds so that one odd frame cannot raise an alarm. <span class="lvl"><i class="lvl-icon MEDIUM"></i>MEDIUM</span> from <span id="help-med">30</span>, <span class="lvl"><i class="lvl-icon HIGH"></i>HIGH</span> from <span id="help-high">60</span>.</li>
+    </ol>
+    <h3>Why not just look for duplicate names?</h3>
+    <p>Big networks (campus, office) legitimately use many access points with the same name. A name-only check alarms on all of them. The <b>Name-only</b> tab shows how many alarms that simple approach would raise on this capture.</p>
+    <h3>The eight indicators</h3>
+    <dl class="glossary" id="glossary"></dl>
+  </dialog>
+
+  <div class="toasts" id="toasts" aria-live="assertive"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

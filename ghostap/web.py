@@ -16,8 +16,9 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from collections import defaultdict
-from typing import Optional
+from typing import List, Optional
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
@@ -55,13 +56,14 @@ def create_app(db: str, config: Optional[dict] = None,
 
     # -- pages -------------------------------------------------------------- #
 
+    # max_age=0: browsers revalidate (cheap 304s), so an updated dashboard is never stale
     @app.get("/")
     def index():
-        return send_from_directory(STATIC, "index.html")
+        return send_from_directory(STATIC, "index.html", max_age=0)
 
     @app.get("/static/<path:name>")
     def static_files(name):
-        return send_from_directory(STATIC, name)
+        return send_from_directory(STATIC, name, max_age=0)
 
     @app.get("/vendor/plotly.min.js")
     def plotly_js():
@@ -83,6 +85,9 @@ def create_app(db: str, config: Optional[dict] = None,
                 "SELECT level, COUNT(*) FROM alerts WHERE detector='ghostap' GROUP BY level").fetchall())
             n_base = s.conn.execute(
                 "SELECT COUNT(*) FROM alerts WHERE detector='baseline'").fetchone()[0]
+            n_ssids = s.conn.execute(
+                "SELECT COUNT(DISTINCT ssid) FROM observations").fetchone()[0]
+            top = s.alerts("ghostap")[:1]
         t0 = row["t0"]
         baseline_s = cfg["baseline_minutes"] * 60
         return jsonify({
@@ -96,32 +101,110 @@ def create_app(db: str, config: Optional[dict] = None,
             "baseline_complete": t0 is not None and row["t1"] >= t0 + baseline_s,
             "alerts": {"HIGH": levels.get("HIGH", 0), "MEDIUM": levels.get("MEDIUM", 0)},
             "baseline_alerts": n_base,
+            "networks": n_ssids,
+            "top_alert": ({k: top[0][k] for k in ("id", "ssid", "bssid", "level", "score",
+                                                  "first_ts", "reasons", "triage_status")}
+                          if top else None),
             "thresholds": cfg["thresholds"],
             "weights": cfg["weights"],
         })
 
-    @app.get("/api/aps")
-    def aps():
-        with store() as s:
-            profiles = s.profiles()
-            latest = {(r["ssid"], r["bssid"]): r for r in s.conn.execute(
-                "SELECT t.* FROM risk_timeline t JOIN (SELECT ssid, bssid, MAX(ts) AS ts "
-                "FROM risk_timeline GROUP BY ssid, bssid) m "
-                "ON t.ssid=m.ssid AND t.bssid=m.bssid AND t.ts=m.ts").fetchall()}
-            peak = {(r[0], r[1]): r[2] for r in s.conn.execute(
-                "SELECT ssid, bssid, MAX(score) FROM risk_timeline GROUP BY ssid, bssid").fetchall()}
-            alert_ids = {(r[0], r[1]): r[2] for r in s.conn.execute(
-                "SELECT ssid, bssid, id FROM alerts WHERE detector='ghostap'").fetchall()}
+    def baseline_end(s: Store) -> Optional[float]:
+        t0 = s.conn.execute("SELECT MIN(ts) FROM observations").fetchone()[0]
+        return None if t0 is None else t0 + cfg["baseline_minutes"] * 60
+
+    def ap_facts(s: Store, profile: dict, b_end: Optional[float]) -> dict:
+        """Everything the comparison view shows about one AP."""
+        q = (profile["ssid"], profile["bssid"])
+        first = s.conn.execute(
+            "SELECT ts, tsf FROM observations WHERE ssid=? AND bssid=? AND tsf IS NOT NULL "
+            "ORDER BY ts LIMIT 1", q).fetchone()
+        last = s.conn.execute(
+            "SELECT ts, tsf FROM observations WHERE ssid=? AND bssid=? AND tsf IS NOT NULL "
+            "ORDER BY ts DESC LIMIT 1", q).fetchone()
+        fps = [r[0] for r in s.conn.execute(
+            "SELECT DISTINCT fingerprint FROM observations WHERE ssid=? AND bssid=? "
+            "AND frame_type='beacon' AND fingerprint IS NOT NULL", q).fetchall()]
+        bi = s.conn.execute(
+            "SELECT beacon_interval, COUNT(*) c FROM observations WHERE ssid=? AND bssid=? "
+            "AND beacon_interval IS NOT NULL GROUP BY beacon_interval ORDER BY c DESC LIMIT 1",
+            q).fetchone()
+        return dict(profile,
+                    oui=profile["bssid"][:8],
+                    uptime_first_seen=(first["tsf"] / 1e6) if first else None,
+                    uptime_now=(last["tsf"] / 1e6) if last else None,
+                    fingerprints=fps,
+                    beacon_interval=bi[0] if bi else None,
+                    in_baseline=b_end is not None and profile["first_seen"] < b_end,
+                    allowlisted=profile["bssid"] in {b.lower() for b in cfg.get("known_bssids") or []})
+
+    def ap_rows(s: Store) -> List[dict]:
+        latest = s.latest()
+        peak = {(r[0], r[1]): r[2] for r in s.conn.execute(
+            "SELECT ssid, bssid, MAX(score) FROM risk_timeline GROUP BY ssid, bssid").fetchall()}
+        alerts_by = {(r["ssid"], r["bssid"]): r for r in s.conn.execute(
+            "SELECT id, ssid, bssid, level, triage_status FROM alerts WHERE detector='ghostap'").fetchall()}
+        dup = {(r[0], r[1]) for r in s.conn.execute(
+            "SELECT ssid, bssid FROM alerts WHERE detector='baseline'").fetchall()}
+        b_end = baseline_end(s)
         out = []
-        for p in profiles:
+        for p in s.profiles():
             key = (p["ssid"], p["bssid"])
-            cur = latest.get(key)
+            cur, al = latest.get(key), alerts_by.get(key)
             out.append(dict(p,
                             score=cur["score"] if cur else None,
                             level=cur["level"] if cur else None,
                             peak_score=peak.get(key),
-                            alert_id=alert_ids.get(key)))
+                            alert_id=al["id"] if al else None,
+                            alert_level=al["level"] if al else None,
+                            triage_status=al["triage_status"] if al else None,
+                            duplicate_flag=key in dup,
+                            in_baseline=b_end is not None and p["first_seen"] < b_end))
         out.sort(key=lambda a: (-(a["peak_score"] or 0), a["ssid"], a["bssid"]))
+        return out
+
+    @app.get("/api/aps")
+    def aps():
+        with store() as s:
+            return jsonify(ap_rows(s))
+
+    @app.get("/api/networks")
+    def networks():
+        """APs grouped by SSID, most suspicious network first."""
+        with store() as s:
+            rows = ap_rows(s)
+        groups: dict = {}
+        for r in rows:
+            g = groups.setdefault(r["ssid"], {"ssid": r["ssid"], "aps": [], "peak": 0.0})
+            g["aps"].append(r)
+            g["peak"] = max(g["peak"], r["peak_score"] or 0.0)
+        out = sorted(groups.values(), key=lambda g: (-g["peak"], g["ssid"]))
+        for g in out:
+            g["securities"] = sorted({x for a in g["aps"] for x in (a["securities"] or "").split(",") if x})
+            g["channels"] = sorted({int(x) for a in g["aps"] for x in (a["channels"] or "").split(",") if x})
+        return jsonify(out)
+
+    @app.get("/api/ap")
+    def ap_detail():
+        ssid, bssid = request.args.get("ssid"), (request.args.get("bssid") or "").lower()
+        with store() as s:
+            profiles = [p for p in s.profiles() if p["ssid"] == ssid]
+            me = next((p for p in profiles if p["bssid"] == bssid), None)
+            if me is None:
+                abort(404)
+            b_end = baseline_end(s)
+            latest = s.latest().get((ssid, bssid))
+            alert = next((a for a in s.alerts("ghostap") if a["bssid"] == bssid and a["ssid"] == ssid), None)
+            dup = next((a for a in s.alerts("baseline") if a["bssid"] == bssid and a["ssid"] == ssid), None)
+            out = {
+                "ap": ap_facts(s, me, b_end),
+                "siblings": [ap_facts(s, p, b_end) for p in profiles if p["bssid"] != bssid],
+                "latest": latest,
+                "alert": alert,
+                "baseline_alert": dup,
+                "timeline": s.timeline(ssid, bssid),
+                "baseline_end": b_end,
+            }
         return jsonify(out)
 
     @app.get("/api/alerts")
@@ -140,6 +223,22 @@ def create_app(db: str, config: Optional[dict] = None,
             prof = [p for p in s.profiles() if p["ssid"] == a["ssid"] and p["bssid"] == a["bssid"]]
         a["profile"] = prof[0] if prof else None
         return jsonify(a)
+
+    @app.post("/api/alerts/<int:alert_id>/triage")
+    def triage(alert_id: int):
+        # JSON only: a cross-site form post cannot send application/json without a CORS
+        # preflight, which this server never approves.
+        body = request.get_json(silent=True)
+        if not request.is_json or not isinstance(body, dict):
+            return jsonify({"error": "expected a JSON body"}), 415
+        status_ = body.get("status")
+        note = body.get("note")
+        if status_ not in Store.TRIAGE_STATES or (note is not None and not isinstance(note, str)):
+            return jsonify({"error": "status must be one of " + ", ".join(Store.TRIAGE_STATES)}), 400
+        with store() as s:
+            if not s.set_triage(alert_id, status_, note, time.time()):
+                abort(404)
+            return jsonify(s.alert(alert_id))
 
     @app.get("/api/timeline")
     def timeline():
