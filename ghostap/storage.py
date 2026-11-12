@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from typing import List
+from typing import List, Optional
 
 OBS_FIELDS = (
     "ts", "frame_type", "ssid", "bssid", "oui", "channel",
@@ -98,6 +98,16 @@ class Store:
             "SELECT * FROM ap_profiles ORDER BY ssid, bssid"
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def observations(self, until: Optional[float] = None) -> List[dict]:
+        """All observations in time order, optionally only those with ts <= until."""
+        sql = "SELECT {} FROM observations".format(", ".join(OBS_FIELDS))
+        params: tuple = ()
+        if until is not None:
+            sql += " WHERE ts <= ?"
+            params = (until,)
+        sql += " ORDER BY ts, id"
+        return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
 
     def close(self) -> None:
         self.commit()

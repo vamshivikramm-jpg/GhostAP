@@ -14,7 +14,8 @@ HIDDEN_SSID = "<hidden>"
 _SECURITY_RANK = ("WPA3", "WPA2", "WPA", "WEP", "OPN")
 
 
-def _rank(entry: str) -> int:
+def security_rank(entry: str) -> int:
+    """0 = strongest (WPA3) ... 4 = OPN; unknown families sort last."""
     family = entry.split("/", 1)[0].upper()
     try:
         return _SECURITY_RANK.index(family)
@@ -26,7 +27,7 @@ def strongest_security(crypto: Optional[set]) -> str:
     """Pick the strongest entry of Scapy's crypto set (WPA3 > WPA2 > WPA > WEP > OPN)."""
     if not crypto:
         return "OPN"
-    return sorted(crypto, key=lambda e: (_rank(e), e))[0]
+    return sorted(crypto, key=lambda e: (security_rank(e), e))[0]
 
 
 def _clean_ssid(ssid: Any) -> str:

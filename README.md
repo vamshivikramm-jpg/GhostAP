@@ -18,7 +18,7 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 | 0 | Setup & hardware (Linux + monitor-mode adapter) | manual |
 | 1 | Collector + storage + synthetic test data | ✅ done |
 | 2 | Labelled lab dataset (real captures) | todo |
-| 3 | Indicators | todo |
+| 3 | Indicators | ✅ done |
 | 4 | Risk engine | todo |
 | 5 | Dashboard | todo |
 | 6 | Evaluation | todo |
@@ -30,6 +30,7 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 ghostap/parser.py      frame -> observation dict
 ghostap/storage.py     SQLite store (observations + ap_profiles)
 ghostap/collector.py   CLI entry point (offline pcap or live sniff)
+ghostap/indicators.py  baseline learning + 7 Evil Twin indicators
 tools/make_test_pcap.py synthetic capture with one evil twin
 tests/                 pytest suite
 data/                  captures and databases (gitignored)
@@ -64,6 +65,28 @@ The synthetic capture contains 300 s of beacons from four APs:
 | MVSR_WiFi | a4:2b:b0:11:22:99 | 1 | WPA2 | ~-70 | legit (second AP, must not be flagged) |
 | Cafe_Guest | f0:9f:c2:aa:bb:cc | 11 | Open | ~-75 | legit |
 | MVSR_WiFi | 00:c0:ca:de:ad:01 | 11 | Open | ~-38 | **evil twin**, appears at t=180 s |
+
+## Indicators (Phase 3)
+
+```bash
+python -m ghostap.indicators --db data/ghostap.db --baseline-minutes 2
+```
+
+The first N minutes of the capture are the **baseline** (what each SSID normally looks
+like). Every AP then gets seven indicator values in [0, 1], each with a reason:
+
+| Short | Indicator | Fires when |
+|-------|-----------|------------|
+| SEC | `security_downgrade` | weaker security than the SSID's baseline (WPA2 → WPA 0.5, → WEP/open 1.0) |
+| OUI | `new_bssid_oui` | BSSID not in baseline: same vendor 0.3, different vendor or random MAC 1.0 |
+| CH | `channel_deviation` | new BSSID on a channel the SSID never used 1.0; known BSSID changed channel 0.5 |
+| RSSI | `rssi_jump` | signal more than 6 dB above baseline, reaching 1.0 at 16 dB above |
+| TSF | `tsf_anomaly` | TSF counter reset, or uptime far below sibling APs (log-scale ratio) |
+| CLONE | `bssid_conflict` | same BSSID alternating between channels, or sequence numbers going backwards |
+| BI | `beacon_interval_mismatch` | beacon interval differs from the SSID's baseline |
+
+Hidden SSIDs are not compared with each other. The baseline must not contain the
+attack itself, so in lab captures start the evil twin after the baseline window.
 
 ## Run live (Linux only)
 
