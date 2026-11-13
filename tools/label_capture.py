@@ -37,9 +37,10 @@ def scan(pcap: str):
 
     aps = OrderedDict()
     t0 = None
+    rejected: dict = {}
     with PcapReader(pcap) as reader:
         for pkt in reader:
-            o = parse_frame(pkt)
+            o = parse_frame(pkt, rejected)
             if not o:
                 continue
             t0 = o["ts"] if t0 is None else min(t0, o["ts"])
@@ -54,6 +55,9 @@ def scan(pcap: str):
             a["security"].add(o["security"])
             if o["rssi"] is not None:
                 a["rssi"].append(o["rssi"])
+    bad = {k: v for k, v in rejected.items() if k != "not_beacon" and v}
+    if bad:
+        print("[i] skipped damaged frames: " + ", ".join("{} {}".format(v, k) for k, v in bad.items()))
     return t0, aps
 
 

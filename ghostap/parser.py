@@ -87,46 +87,94 @@ def beacon_fingerprint(body) -> Optional[str]:
             else:
                 parts.append(str(eid))                         # presence and order only
             elt = elt.payload
-        return hashlib.sha1("|".join(parts).encode()).hexdigest()[:12]
+        return hashlib.sha1("|".join(parts).encode(), usedforsecurity=False).hexdigest()[:12]
     except Exception:  # malformed elements: no fingerprint rather than a crash
         return None
 
 
-def parse_frame(pkt) -> Optional[dict]:
-    """Return an observation dict for a beacon / probe response, else None."""
-    if pkt.haslayer(Dot11Beacon):
-        body = pkt[Dot11Beacon]
-        frame_type = "beacon"
-    elif pkt.haslayer(Dot11ProbeResp):
-        body = pkt[Dot11ProbeResp]
-        frame_type = "probe_resp"
-    else:
-        return None
+REJECT_REASONS = ("not_beacon", "bad_fcs", "truncated", "malformed")
 
-    dot11 = pkt[Dot11]
-    bssid = (dot11.addr3 or dot11.addr2 or "").lower()
-    if not bssid:
+
+def _bad_fcs(pkt) -> bool:
+    """The driver says the frame failed its checksum (radio corruption)."""
+    if not pkt.haslayer(RadioTap):
+        return False
+    flags = getattr(pkt[RadioTap], "Flags", None)
+    return flags is not None and "badFCS" in str(flags)
+
+
+def _truncated(pkt, body) -> bool:
+    """Frame cut short (capture snap length) or an element longer than the data left."""
+    wirelen = getattr(pkt, "wirelen", None)
+    if wirelen and len(bytes(pkt)) < wirelen:
+        return True
+    elt = body.payload
+    while isinstance(elt, Dot11Elt):
+        if elt.len is not None and len(bytes(elt)) < 2 + int(elt.len):
+            return True
+        elt = elt.payload
+    return False
+
+
+def _has_ssid_element(body) -> bool:
+    elt = body.payload
+    while isinstance(elt, Dot11Elt):
+        if int(elt.ID) == 0:
+            return True
+        elt = elt.payload
+    return False
+
+
+def parse_frame(pkt, stats: Optional[dict] = None) -> Optional[dict]:
+    """Return an observation dict for a beacon / probe response, else None.
+
+    Frames that are corrupted (bad FCS), truncated or malformed are rejected
+    instead of being guessed at: a damaged beacon can carry a garbage SSID or
+    BSSID, or lose its security element and look like an open network, which
+    would create false alarms. Pass a dict as `stats` to count rejections by
+    reason (see REJECT_REASONS).
+    """
+    def reject(reason):
+        if stats is not None:
+            stats[reason] = stats.get(reason, 0) + 1
         return None
 
     try:
-        stats = body.network_stats()
-    except Exception:  # malformed information elements
-        stats = {}
+        if pkt.haslayer(Dot11Beacon):
+            body = pkt[Dot11Beacon]
+            frame_type = "beacon"
+        elif pkt.haslayer(Dot11ProbeResp):
+            body = pkt[Dot11ProbeResp]
+            frame_type = "probe_resp"
+        else:
+            return reject("not_beacon")
+        if _bad_fcs(pkt):
+            return reject("bad_fcs")
+        if _truncated(pkt, body):
+            return reject("truncated")
+        if not _has_ssid_element(body):          # mandatory in every beacon / probe response
+            return reject("malformed")
 
-    channel = stats.get("channel")
-    sc = dot11.SC
-
-    return {
-        "ts": float(pkt.time),
-        "frame_type": frame_type,
-        "ssid": _clean_ssid(stats.get("ssid")),
-        "bssid": bssid,
-        "oui": bssid[:8],
-        "channel": int(channel) if channel is not None else None,
-        "security": strongest_security(stats.get("crypto")),
-        "rssi": _rssi(pkt),
-        "beacon_interval": int(body.beacon_interval) if body.beacon_interval is not None else None,
-        "tsf": int(body.timestamp) if body.timestamp is not None else None,
-        "seq": (int(sc) >> 4) if sc is not None else None,
-        "fingerprint": beacon_fingerprint(body),
-    }
+        dot11 = pkt[Dot11]
+        bssid = (dot11.addr3 or dot11.addr2 or "").lower()
+        if not bssid:
+            return reject("malformed")
+        info = body.network_stats()
+        channel = info.get("channel")
+        sc = dot11.SC
+        return {
+            "ts": float(pkt.time),
+            "frame_type": frame_type,
+            "ssid": _clean_ssid(info.get("ssid")),
+            "bssid": bssid,
+            "oui": bssid[:8],
+            "channel": int(channel) if channel is not None else None,
+            "security": strongest_security(info.get("crypto")),
+            "rssi": _rssi(pkt),
+            "beacon_interval": int(body.beacon_interval) if body.beacon_interval is not None else None,
+            "tsf": int(body.timestamp) if body.timestamp is not None else None,
+            "seq": (int(sc) >> 4) if sc is not None else None,
+            "fingerprint": beacon_fingerprint(body),
+        }
+    except Exception:  # anything Scapy cannot make sense of: untrusted radio input
+        return reject("malformed")

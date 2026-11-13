@@ -37,13 +37,17 @@ def _is_beacon_or_probe_resp(pkt) -> bool:
     return getattr(pkt, "type", None) == 0 and getattr(pkt, "subtype", None) in (8, 5)
 
 
-def collect_pcap(path: str, store: Store) -> int:
+def collect_pcap(path: str, store: Store, stats: Optional[dict] = None) -> int:
+    """Parse every beacon / probe response in a pcap into `store`.
+
+    `stats` (optional dict) receives counts of rejected frames by reason.
+    """
     from scapy.utils import PcapReader
 
     n = 0
     with PcapReader(path) as reader:
         for pkt in reader:
-            obs = parse_frame(pkt)
+            obs = parse_frame(pkt, stats)
             if obs:
                 store.add(obs)
                 n += 1
@@ -55,7 +59,8 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
                  hop: Optional[List[int]] = None, dwell: float = 0.25,
                  save_pcap: Optional[str] = None, stop: Optional[threading.Event] = None,
                  on_frame: Optional[Callable[[dict], None]] = None,
-                 on_status: Optional[Callable[[str], None]] = None) -> int:
+                 on_status: Optional[Callable[[str], None]] = None,
+                 stats: Optional[dict] = None) -> int:
     """Sniff beacons / probe responses until `duration` seconds pass or `stop` is set.
 
     hop:       channel list to cycle through (None = stay on the current channel)
@@ -76,7 +81,7 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
         writer = PcapWriter(save_pcap, linktype=127, sync=True)  # 127 = RadioTap
 
     def handle(pkt):
-        obs = parse_frame(pkt)
+        obs = parse_frame(pkt, stats)
         if obs:
             store.add(obs)
             counter["n"] += 1
@@ -104,6 +109,13 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
             writer.close()
         store.commit()
     return counter["n"]
+
+
+def print_rejected(rejected: dict) -> None:
+    bad = {k: v for k, v in rejected.items() if k != "not_beacon" and v}
+    if bad:
+        print("[i] skipped damaged frames: " + ", ".join(
+            "{} {}".format(v, k.replace("_", " ")) for k, v in sorted(bad.items())))
 
 
 def format_table(profiles: List[dict]) -> str:
@@ -154,16 +166,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         store.reset()
     try:
         if args.pcap:
+            rejected: dict = {}
             try:
-                n = collect_pcap(args.pcap, store)
+                n = collect_pcap(args.pcap, store, rejected)
             except FileNotFoundError:
                 print("[!] pcap not found: {}".format(args.pcap), file=sys.stderr)
                 return 1
             print("[+] Parsed {} beacon/probe-response frames from {}".format(n, args.pcap))
+            print_rejected(rejected)
         else:
             try:
+                rejected = {}
                 n = collect_live(args.iface, args.duration, store, hop=hop, dwell=args.dwell,
-                                 save_pcap=args.save_pcap,
+                                 save_pcap=args.save_pcap, stats=rejected,
                                  on_status=lambda m: print("[~] " + m, end="\r", flush=True))
             except (PermissionError, OSError) as e:
                 print(LIVE_HELP.format(err=e), file=sys.stderr)
@@ -174,6 +189,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 2
             print("[+] Captured {} beacon/probe-response frames on {} ({}s)".format(
                 n, args.iface, args.duration))
+            print_rejected(rejected)
             if args.save_pcap:
                 print("[+] Saved them to {} (label it with tools/label_capture.py)".format(args.save_pcap))
         store.rebuild_profiles()
