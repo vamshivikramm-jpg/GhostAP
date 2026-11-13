@@ -79,7 +79,7 @@ def main():
     interactive = not args.no_pause and sys.stdin.isatty()
 
     try:
-        for i, (title, note, cmd) in enumerate(STEPS[:5]):
+        for title, note, cmd in STEPS[:5]:
             banner(title, note)
             if cmd:
                 run(cmd)

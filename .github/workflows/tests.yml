@@ -18,7 +18,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt ruff pip-audit
+      - name: Lint (ruff, incl. security rules)
+        run: ruff check .
+      - name: Dependency vulnerability scan
+        run: pip-audit -r requirements.txt
       - name: Run tests
         run: pytest -q
       - name: Evaluation smoke test

@@ -1,0 +1,30 @@
+[project]
+name = "ghostap"
+version = "1.0.0"
+description = "Passive Evil Twin Wi-Fi access point detector (beacon analysis, risk scoring, dashboard)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = [".venv", "data", "results"]
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, bugbear, bandit-style security checks
+select = ["F", "E", "W", "B", "S"]
+ignore = [
+    "B905",   # zip() without strict=: our zips pair sequences of known equal length
+    "S101",   # assert is how pytest works
+    "S311",   # random is used for synthetic test data, not for security
+    "S603",   # subprocess with a fixed argument list (iw), no shell
+    "S607",   # `iw` is looked up on PATH on purpose
+    "S608",   # SQL strings only splice in constant column / table names; values are parameters
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]
