@@ -31,9 +31,8 @@ import tempfile
 from typing import Dict, List, Optional, Tuple
 
 from .collector import collect_pcap
-from .indicators import Analyzer
 from .config import ConfigError, load_config
-from .risk import RiskEngine, duplicate_ssid_detector
+from .risk import RiskEngine, analyzer_for, duplicate_ssid_detector
 from .storage import Store
 
 DETECTORS = ("ghostap", "baseline")
@@ -91,7 +90,7 @@ def run_capture(name: str, pcap: str, labels_path: str, cfg: dict,
             collect_pcap(pcap, store)
             obs = store.observations()
 
-    an = Analyzer(obs, cfg["baseline_minutes"], cfg.get("known_bssids") or ())
+    an = analyzer_for(cfg, obs)
     timeline = RiskEngine(an, cfg).run().timeline
     base_first = {(a["ssid"], a["bssid"]): a["first_ts"] for a in duplicate_ssid_detector(obs)}
 

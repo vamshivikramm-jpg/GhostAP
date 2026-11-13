@@ -26,6 +26,8 @@ def test_wpa2_beacon():
     obs = parse_frame(beacon("MVSR_WiFi", "A4:2B:B0:11:22:33", 6, True, rssi=-55))
     fp = obs.pop("fingerprint")
     assert isinstance(fp, str) and len(fp) == 12
+    assert obs.pop("rsn") == "pw=CCMP;akm=PSK;pmf=none"
+    assert obs.pop("freq") is None                 # this test frame has no frequency field
     assert obs == {
         "ts": 1700000000.5,
         "frame_type": "beacon",

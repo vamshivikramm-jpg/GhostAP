@@ -92,6 +92,41 @@ def register(app, ctx) -> None:
             "retention": {"raw_hours": ret.get("raw_hours"), "pruned_frames": st.get("pruned_frames", 0)},
         })
 
+    # ---------------------------------------------------------------- F042 capture quality
+    @app.get("/api/quality")
+    def quality():
+        """Per channel: frames and radios in the last minute of capture. Per AP: how many
+        of its expected beacons were actually heard (low = weak signal or hopping away)."""
+        st = ctx.status()
+        with Store(ctx.db_path()) as s:
+            last = s.conn.execute("SELECT MAX(ts) FROM observations").fetchone()[0]
+            channels = [dict(r) for r in s.conn.execute(
+                "SELECT channel, COUNT(*) AS frames, COUNT(DISTINCT bssid) AS aps FROM observations "
+                "WHERE ts > ? AND channel IS NOT NULL GROUP BY channel ORDER BY channel",
+                ((last or 0) - 60,)).fetchall()] if last else []
+            rows = s.conn.execute(
+                "SELECT p.ssid, p.bssid, p.frames, p.first_seen, p.last_seen, "
+                "(SELECT MAX(beacon_interval) FROM observations o WHERE o.bssid = p.bssid AND o.ssid = p.ssid) "
+                "AS bi FROM ap_profiles p").fetchall()
+            events = s.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        aps = []
+        for r in rows:
+            span = (r["last_seen"] or 0) - (r["first_seen"] or 0)
+            expected = span / (r["bi"] * 0.001024) if r["bi"] and span > 0 else None
+            aps.append({"ssid": r["ssid"], "bssid": r["bssid"], "frames": r["frames"],
+                        "heard_ratio": round(min(1.0, r["frames"] / expected), 4) if expected else None})
+        aps.sort(key=lambda a: (a["heard_ratio"] is None, a["heard_ratio"] or 0))
+        return jsonify({"window_seconds": 60, "channels": channels, "aps": aps,
+                        "damaged_frames": st.get("rejected") or {}, "hopping": st.get("hopping"),
+                        "deauth_events": events})
+
+    # ---------------------------------------------------------------- F012 incidents
+    @app.get("/api/incidents")
+    def incidents():
+        from .risk import build_incidents
+        with ctx.store() as s:
+            return jsonify(build_incidents(s.alerts()))
+
     # ---------------------------------------------------------------- audit
     @app.get("/api/audit")
     def audit_log():

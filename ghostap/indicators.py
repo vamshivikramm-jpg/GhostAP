@@ -25,7 +25,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from .parser import HIDDEN_SSID, security_rank
+from .parser import CIPHER_RANK, HIDDEN_SSID, akm_class, rsn_fields, security_rank
+from .signatures import SIGNATURE_NAMES, karma_value, lookalike_target, match_tool
 from .storage import Store
 
 DEFAULT_BASELINE_MINUTES = 2.0
@@ -62,6 +63,8 @@ class APStats:
     beacon_interval: Optional[int]
     fingerprints: Set[str] = field(default_factory=set)
     tsf_resets: Optional[int] = None   # precomputed by Analyzer over the full history
+    rsn: Set[str] = field(default_factory=set)        # RSN detail strings seen (F004)
+    skew_ppm: Optional[Tuple[float, float]] = None   # (drift, std error) in ppm, set by Analyzer (F007)
 
     @classmethod
     def from_obs(cls, obs: Sequence[dict]) -> "APStats":
@@ -82,6 +85,7 @@ class APStats:
             beacon_interval=bis.most_common(1)[0][0] if bis else None,
             fingerprints={o["fingerprint"] for o in obs
                           if o.get("fingerprint") and o.get("frame_type", "beacon") == "beacon"},
+            rsn={o["rsn"] for o in obs if o.get("rsn")},
         )
 
     @property
@@ -111,6 +115,8 @@ class SSIDBaseline:
     bssid_fingerprints: Dict[str, Set[str]] = field(default_factory=dict)
     allowlist: Set[str] = field(default_factory=set)                 # admin-approved BSSIDs
     saved: bool = False                     # loaded from a saved baseline (F014), not learned
+    rsn_best: Optional[dict] = None         # strongest {pmf, cipher, akm} ranks seen (F004)
+    bssid_skew: Dict[str, Tuple[float, float]] = field(default_factory=dict)   # (ppm, se) per AP (F007)
 
     def to_dict(self) -> dict:
         """JSON-friendly form for data/monitored.json."""
@@ -123,6 +129,8 @@ class SSIDBaseline:
             "beacon_interval": self.beacon_interval,
             "fingerprints": sorted(self.fingerprints),
             "bssid_fingerprints": {b: sorted(f) for b, f in sorted(self.bssid_fingerprints.items())},
+            "rsn_best": self.rsn_best,
+            "bssid_skew": {b: [round(v[0], 2), round(v[1], 2)] for b, v in sorted(self.bssid_skew.items())},
         }
 
     @classmethod
@@ -138,7 +146,9 @@ class SSIDBaseline:
             beacon_interval=d.get("beacon_interval"),
             fingerprints=set(d.get("fingerprints", [])),
             bssid_fingerprints={b.lower(): set(f) for b, f in d.get("bssid_fingerprints", {}).items()},
-            allowlist={b.lower() for b in allowlist}, saved=True)
+            allowlist={b.lower() for b in allowlist}, saved=True,
+            rsn_best=d.get("rsn_best"),
+            bssid_skew={b.lower(): (float(v[0]), float(v[1])) for b, v in d.get("bssid_skew", {}).items()})
 
 
 class Baseline:
@@ -176,6 +186,13 @@ class Baseline:
                 securities |= ap.securities
                 b.fingerprints |= ap.fingerprints
                 b.bssid_fingerprints[bssid] = set(ap.fingerprints)
+                strength = rsn_strength(ap.rsn)
+                if strength:
+                    b.rsn_best = strength if b.rsn_best is None else {
+                        k: max(b.rsn_best[k], strength[k]) for k in strength}
+                skew = clock_skew_ppm(obs)
+                if skew is not None:
+                    b.bssid_skew[bssid] = skew
                 if ap.beacon_interval:
                     bis[ap.beacon_interval] += len(obs)
             known = [s for s in securities if security_rank(s) <= 4]
@@ -213,8 +230,72 @@ def _chans(chs) -> str:
 # Indicators
 # --------------------------------------------------------------------------- #
 
+_PMF_RANK = {"none": 0, "capable": 1, "required": 2}
+
+
+def rsn_strength(rsn_strings: Iterable[str]) -> Optional[dict]:
+    """Weakest option an AP offers, as ranks: pmf (0-2), cipher (0-3), akm class (0-3)."""
+    out = None
+    for r in rsn_strings or ():
+        f = rsn_fields(r)
+        if not f["akm"] and not f["pw"]:
+            continue
+        s = {"pmf": _PMF_RANK.get(f["pmf"] or "none", 0),
+             "cipher": min((CIPHER_RANK.get(c, 0) for c in f["pw"]), default=0),
+             "akm": min((akm_class(a) for a in f["akm"]), default=0)}
+        out = s if out is None else {k: min(out[k], s[k]) for k in s}
+    return out
+
+
+def clock_skew_ppm(obs: Sequence[dict], max_points: int = 600) -> Optional[Tuple[float, float]]:
+    """F007: (drift, standard error) of the AP's TSF clock against the capture clock, in
+    parts per million. Needs >= 10 frames over >= 30 s without a TSF reset; uses the last
+    `max_points`. Capture timestamps jitter, so the standard error matters: two drifts are
+    only "different" when the gap is large compared with their combined uncertainty."""
+    pts = [(o["ts"], o["tsf"] / 1e6) for o in obs if o.get("tsf") is not None][-max_points:]
+    if len(pts) < 10 or pts[-1][0] - pts[0][0] < 30:
+        return None
+    if any(b[1] < a[1] for a, b in zip(pts, pts[1:])):
+        return None                                   # reset inside the sample
+    n = len(pts)
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    sxx = sum((p[0] - mx) ** 2 for p in pts)
+    if sxx == 0:
+        return None
+    slope = sum((p[0] - mx) * (p[1] - my) for p in pts) / sxx
+    resid = sum((p[1] - my - slope * (p[0] - mx)) ** 2 for p in pts)
+    se = math.sqrt(resid / (n - 2) / sxx) if n > 2 else float("inf")
+    return (slope - 1.0) * 1e6, se * 1e6
+
+
+def _detail_downgrade(ap: APStats, base: SSIDBaseline):
+    """F004: (value, reason) for weaker RSN details than the network normally uses."""
+    if not base.rsn_best or not ap.rsn:
+        return 0.0, None
+    s, b = rsn_strength(ap.rsn), base.rsn_best
+    if s is None:
+        return 0.0, None
+    found = []
+    if b["akm"] == 3 and s["akm"] < 3:
+        found.append((1.0, "offers a shared-password login while the network uses enterprise (802.1X) logins"))
+    elif b["akm"] == 2 and s["akm"] == 1:
+        found.append((0.8, "also offers WPA2 password login (WPA3 transition) while the network used WPA3 only"))
+    if s["cipher"] <= 1 < b["cipher"]:
+        found.append((1.0, "allows the broken TKIP/WEP cipher, which the network does not use"))
+    if b["pmf"] == 2 and s["pmf"] < 2:
+        found.append((0.8 if s["pmf"] == 0 else 0.4,
+                      "does not require protected management frames, which the network requires"))
+    elif b["pmf"] == 1 and s["pmf"] == 0:
+        found.append((0.4, "has protected management frames switched off"))
+    if not found:
+        return 0.0, None
+    return max(v for v, _ in found), "; ".join(r for _, r in found)
+
+
 def security_downgrade(ap: APStats, base: Optional[SSIDBaseline], siblings) -> IndicatorResult:
-    """Weaker security than the SSID used during the baseline (e.g. WPA2 -> open)."""
+    """Weaker security than the SSID used during the baseline: WPA2 -> open, and (F004)
+    weaker details such as enterprise -> password, WPA3 -> transition, TKIP, PMF off."""
     name = "security_downgrade"
     if base is None or base.security is None:
         return IndicatorResult(name, 0, "no baseline security for SSID '{}'".format(ap.ssid))
@@ -222,13 +303,16 @@ def security_downgrade(ap: APStats, base: Optional[SSIDBaseline], siblings) -> I
     if weakest is None:
         return IndicatorResult(name, 0, "security unknown")
     diff = security_rank(weakest) - security_rank(base.security)
-    if diff <= 0:
+    family_v = diff / 2 if diff > 0 else 0.0           # WPA2 -> WPA = 0.5, -> WEP/OPN = 1.0
+    detail_v, detail_reason = _detail_downgrade(ap, base) if diff <= 0 else (0.0, None)
+    if family_v <= 0 and detail_v <= 0:
         return IndicatorResult(name, 0, "{} matches baseline {}".format(weakest, base.security))
-    # WPA2 -> WPA = 0.5, WPA2 -> WEP/OPN = 1.0
-    return IndicatorResult(
-        name, diff / 2,
-        "advertises {} but '{}' used {} during the baseline (security downgrade)".format(
-            weakest, ap.ssid, base.security))
+    if family_v >= detail_v:
+        return IndicatorResult(
+            name, family_v,
+            "advertises {} but '{}' used {} during the baseline (security downgrade)".format(
+                weakest, ap.ssid, base.security))
+    return IndicatorResult(name, detail_v, "{} (security downgrade)".format(detail_reason))
 
 
 def new_bssid_oui(ap: APStats, base: Optional[SSIDBaseline], siblings) -> IndicatorResult:
@@ -314,7 +398,8 @@ def rssi_jump(ap: APStats, base: Optional[SSIDBaseline], siblings,
         "{:.0f} dBm is {:+.0f} dB stronger than {} ({:.0f} dBm)".format(now, delta, what, ref))
 
 
-def tsf_anomaly(ap: APStats, base: Optional[SSIDBaseline], siblings) -> IndicatorResult:
+def tsf_anomaly(ap: APStats, base: Optional[SSIDBaseline], siblings,
+                skew_tolerance_ppm: float = 10.0) -> IndicatorResult:
     """TSF (uptime) far below sibling APs, or the TSF counter reset."""
     name = "tsf_anomaly"
     tsf_obs = [o for o in ap.obs if o.get("tsf") is not None]
@@ -329,6 +414,18 @@ def tsf_anomaly(ap: APStats, base: Optional[SSIDBaseline], siblings) -> Indicato
         return IndicatorResult(
             name, 1.0, "TSF counter reset {} time(s) - AP rebooted or a second device is "
                        "using this BSSID".format(resets))
+
+    # 1b) F007: a known BSSID whose clock now drifts differently = different hardware.
+    if base is not None and ap.skew_ppm is not None and ap.bssid in base.bssid_skew:
+        now_ppm, now_se = ap.skew_ppm
+        was_ppm, was_se = base.bssid_skew[ap.bssid]
+        delta = abs(now_ppm - was_ppm)
+        margin = skew_tolerance_ppm + 3 * math.sqrt(now_se ** 2 + was_se ** 2)
+        if delta > margin:
+            return IndicatorResult(
+                name, min(1.0, (delta - margin) / margin + 0.5),
+                "clock drift {:+.1f} ppm, but this BSSID drifted {:+.1f} ppm while GhostAP learned it "
+                "(different hardware using this address?)".format(now_ppm, was_ppm))
 
     # 2) Uptime when first seen vs. the longest-running sibling at that moment.
     ap_up = tsf_obs[0]["tsf"] / 1e6
@@ -352,8 +449,30 @@ def tsf_anomaly(ap: APStats, base: Optional[SSIDBaseline], siblings) -> Indicato
             _fmt_secs(ap_up), ap.ssid, _fmt_secs(sib_up), note))
 
 
+def _signal_tracks(obs: Sequence[dict], gap_db: float):
+    """F006: two clearly separated signal levels that keep alternating = two transmitters."""
+    pts = [(o["ts"], o["rssi"]) for o in obs if o.get("rssi") is not None]
+    if len(pts) < 10:
+        return None
+    vals = sorted(r for _, r in pts)
+    gaps = [(vals[i + 1] - vals[i], i) for i in range(len(vals) - 1)]
+    gap, i = max(gaps)
+    if gap < gap_db:
+        return None
+    cut = (vals[i] + vals[i + 1]) / 2
+    low = [r for r in vals if r < cut]
+    high = [r for r in vals if r >= cut]
+    if min(len(low), len(high)) < 0.2 * len(vals):
+        return None
+    sides = [r >= cut for _, r in sorted(pts)]
+    switches = sum(1 for a, b in zip(sides, sides[1:]) if a != b)
+    if switches < 3:
+        return None
+    return sum(low) / len(low), sum(high) / len(high), switches
+
+
 def bssid_conflict(ap: APStats, base: Optional[SSIDBaseline], siblings,
-                   window: float = 5.0) -> IndicatorResult:
+                   window: float = 5.0, gap_db: float = 12.0) -> IndicatorResult:
     """Same BSSID on two channels at once, or its sequence numbers jump backwards."""
     name = "bssid_conflict"
     obs = ap.obs
@@ -370,6 +489,15 @@ def bssid_conflict(ap: APStats, base: Optional[SSIDBaseline], siblings,
             "same BSSID alternates between channels {} ({} switches within {:g} s) - "
             "cloned BSSID?".format(_chans(chans), len(flips), window))
 
+    # 1b) F006: the same address heard at two separate signal levels at the same time.
+    tracks = _signal_tracks(obs, gap_db)
+    if tracks:
+        lo, hi, switches = tracks
+        return IndicatorResult(
+            name, 1.0,
+            "same BSSID heard at two signal levels, about {:.0f} and {:.0f} dBm, alternating {} times "
+            "- two transmitters share this address".format(lo, hi, switches))
+
     # 2) Sequence numbers going backwards (two transmitters sharing a BSSID).
     seq_obs = [o for o in obs if o.get("seq") is not None]
     if len(seq_obs) < 2:
@@ -385,9 +513,21 @@ def bssid_conflict(ap: APStats, base: Optional[SSIDBaseline], siblings,
         "may share this BSSID".format(back, ratio))
 
 
-def beacon_interval_mismatch(ap: APStats, base: Optional[SSIDBaseline], siblings) -> IndicatorResult:
-    """Beacon interval differs from what the SSID used during the baseline."""
+def beacon_interval_mismatch(ap: APStats, base: Optional[SSIDBaseline], siblings,
+                             rate_tolerance: float = 0.5) -> IndicatorResult:
+    """Beacon interval differs from what the SSID used during the baseline, or (F008) the AP
+    beacons much faster than its own advertised interval allows (beacon flood / fake-AP tool)."""
     name = "beacon_interval_mismatch"
+    beacons = [o["ts"] for o in ap.obs if o.get("frame_type", "beacon") == "beacon"]
+    if ap.beacon_interval and len(beacons) >= 10 and beacons[-1] > beacons[0]:
+        rate = (len(beacons) - 1) / (beacons[-1] - beacons[0])
+        expected = 1.0 / (ap.beacon_interval * 0.001024)
+        ratio = rate / expected
+        if ratio > 1 + rate_tolerance:
+            return IndicatorResult(
+                name, min(1.0, (ratio - 1 - rate_tolerance) / (1 + rate_tolerance)),
+                "beaconing {:.1f} times per second, {:.1f}x what its {} TU interval allows "
+                "(beacon flood or fake-AP tool?)".format(rate, ratio, ap.beacon_interval))
     if base is None or base.beacon_interval is None:
         return IndicatorResult(name, 0, "no beacon interval baseline for SSID '{}'".format(ap.ssid))
     if ap.beacon_interval is None:
@@ -455,12 +595,19 @@ class Analyzer:
     def __init__(self, observations: Sequence[dict] = (),
                  baseline_minutes: float = DEFAULT_BASELINE_MINUTES,
                  allowlist: Iterable[str] = (),
-                 monitored: Optional[Dict[str, SSIDBaseline]] = None):
+                 monitored: Optional[Dict[str, SSIDBaseline]] = None,
+                 library: Optional[List[dict]] = None, detection: Optional[dict] = None,
+                 network_settings: Optional[Dict[str, dict]] = None):
         """monitored: saved baselines (F014). With them, scoring starts at the first frame
-        instead of after the learning period, and a twin already on the air is caught."""
+        instead of after the learning period, and a twin already on the air is caught.
+        library: attack-tool fingerprints (F003). detection: thresholds from config.yaml.
+        network_settings: per-network switches from the monitored-networks file (F011)."""
         self.baseline_minutes = baseline_minutes
         self.allowlist = {b.lower() for b in allowlist}
         self.monitored = dict(monitored or {})
+        self.library = list(library or [])
+        self.detection = dict(detection or {})
+        self.network_settings = dict(network_settings or {})
         self._reset_state()
         self.add(observations)
 
@@ -471,6 +618,8 @@ class Analyzer:
         self._resets: Dict[Tuple[str, str], List[float]] = defaultdict(list)
         self._last_tsf: Dict[Tuple[str, str], int] = {}
         self._by_ssid: Dict[str, Set[str]] = defaultdict(set)
+        # every network name each radio has used, with when it was first heard (F001, F010)
+        self._bssid_ssids: Dict[str, Dict[str, float]] = defaultdict(dict)
         self.baseline = Baseline([], self.baseline_minutes, self.allowlist, self.monitored)
         self._baseline_frozen = False
 
@@ -491,6 +640,15 @@ class Analyzer:
             self._reset_state()
             new = merged
         for o in new:
+            if o["ssid"] == HIDDEN_SSID:
+                names = self._bssid_ssids.get(o["bssid"])
+                if names and len(names) == 1:          # F010: this hidden radio's name is known
+                    o = dict(o, ssid=next(iter(names)), decloaked=True)
+            else:
+                first = o["bssid"] not in self._bssid_ssids or o["ssid"] not in self._bssid_ssids[o["bssid"]]
+                self._bssid_ssids[o["bssid"]].setdefault(o["ssid"], o["ts"])
+                if first and len(self._bssid_ssids[o["bssid"]]) == 1:
+                    self._decloak(o["bssid"], o["ssid"])
             key = (o["ssid"], o["bssid"])
             self.obs.append(o)
             self._by_ap[key].append(o)
@@ -506,6 +664,27 @@ class Analyzer:
             self.baseline = Baseline(self.obs, self.baseline_minutes, self.allowlist, self.monitored)
             # all frames of the baseline window are in once we are past its end
             self._baseline_frozen = self.obs[-1]["ts"] >= self.baseline.end
+
+    def _decloak(self, bssid: str, ssid: str) -> None:
+        """F010: frames from a hidden radio heard before its name was known move to that name."""
+        hk = (HIDDEN_SSID, bssid)
+        if hk not in self._by_ap:
+            return
+        moved = [dict(o, ssid=ssid, decloaked=True) for o in self._by_ap.pop(hk)]
+        self._ts.pop(hk, None)
+        self._by_ssid[HIDDEN_SSID].discard(bssid)
+        key = (ssid, bssid)
+        merged = sorted(self._by_ap.get(key, []) + moved, key=lambda o: o["ts"])
+        self._by_ap[key] = merged
+        self._ts[key] = [o["ts"] for o in merged]
+        self._by_ssid[ssid].add(bssid)
+        self._resets[key] = sorted(self._resets.get(key, []) + self._resets.pop(hk, []))
+        self.obs = sorted([o for o in self.obs if not (o["ssid"] == HIDDEN_SSID and o["bssid"] == bssid)]
+                          + moved, key=lambda o: o["ts"])
+
+    def names_of(self, bssid: str, until: Optional[float] = None) -> List[str]:
+        """Network names this radio has used (up to `until`)."""
+        return sorted(s for s, t in self._bssid_ssids.get(bssid, {}).items() if until is None or t <= until)
 
     @property
     def scoring_start(self) -> float:
@@ -594,24 +773,75 @@ class Analyzer:
             ap = self._stats(ssid, bssid, until)
         if ap is None:
             return None
+        det = self.detection
         if ssid == HIDDEN_SSID:
             return [IndicatorResult(n, 0, "hidden SSID - not compared with other networks")
-                    for n in INDICATOR_NAMES]
+                    for n in INDICATOR_NAMES + SIGNATURE_NAMES]
+
+        # ---- signatures (F001-F003)
+        sig = {}
+        names = self.names_of(bssid, until)
+        n_min = int(det.get("karma_min_ssids", 3))
+        kv = karma_value(len(names), n_min)
+        sig["karma"] = IndicatorResult(
+            "karma", kv,
+            "this radio answers for {} different network names ({}) - KARMA/MANA rogue-AP behaviour".format(
+                len(names), ", ".join(names[:6]) + (" ..." if len(names) > 6 else ""))
+            if kv else "uses {} network name{}".format(len(names), "" if len(names) == 1 else "s"))
+        base = self.baseline.get(ssid)
+        compared_with = ssid
+        target = lookalike_target(ssid, [k for k in self.baseline.ssids if k != ssid],
+                                  int(det.get("lookalike_max_distance", 2)))
+        if target:
+            identical = target[1].startswith("identical")
+            sig["lookalike_ssid"] = IndicatorResult(
+                "lookalike_ssid", 1.0 if identical else (0.6 if target[1].startswith("1 ") else 0.4),
+                "name '{}' imitates the known network '{}' ({})".format(ssid, target[0], target[1]))
+            if base is None and identical:          # judge it against the network it imitates
+                base, compared_with = self.baseline.get(target[0]), target[0]
+        else:
+            sig["lookalike_ssid"] = IndicatorResult("lookalike_ssid", 0, "name does not imitate another known network")
+        tool = match_tool(ap.fingerprints | head.fingerprints, ap.oui, self.library) if self.library else None
+        sig["known_tool"] = IndicatorResult(
+            "known_tool", 1.0 if tool else 0,
+            "matches the {} of '{}'{}".format(tool["matched"], tool["name"],
+                                              " (synthetic example signature)" if tool.get("example") else "")
+            if tool else "no match in the attack-tool library ({} entries)".format(len(self.library)))
+
+        # ---- the eight weighted indicators
         siblings = {}
-        for b in self._by_ssid.get(ssid, ()):
+        for b in self._by_ssid.get(compared_with, ()):
             if b != bssid:
-                st = self._sibling_at((ssid, b), head.first_seen, until)
+                st = self._sibling_at((compared_with, b), head.first_seen, until)
                 if st is not None:
                     siblings[b] = st
-        base = self.baseline.get(ssid)
+        if base is not None and bssid in base.bssid_skew:
+            head.skew_ppm = clock_skew_ppm(self._slice(key, None, until))
+        settings = self.network_settings.get(compared_with) or {}
+        enabled = settings.get("enabled") or {}
         results = []
         for fn in INDICATORS:
-            if fn is rssi_jump:
+            if enabled.get(fn.__name__) is False:
+                results.append(IndicatorResult(fn.__name__, 0, "turned off for this network"))
+            elif fn is rssi_jump:
                 results.append(fn(ap, base, siblings, baseline_end=self.baseline.end))
             elif fn is tsf_anomaly:
-                results.append(fn(head, base, siblings))
+                results.append(fn(head, base, siblings,
+                                  skew_tolerance_ppm=float(det.get("clock_skew_tolerance_ppm", 10.0))))
+            elif fn is bssid_conflict:
+                results.append(fn(ap, base, siblings, gap_db=float(det.get("signal_track_gap_db", 12.0))))
+            elif fn is beacon_interval_mismatch:
+                results.append(fn(ap, base, siblings,
+                                  rate_tolerance=float(det.get("beacon_rate_tolerance", 0.5))))
             else:
                 results.append(fn(ap, base, siblings))
+        if compared_with != ssid:
+            results = [IndicatorResult(r.name, r.value, r.reason + " [compared with '{}']".format(compared_with))
+                       if r.value > 0 else r for r in results]
+        for n in SIGNATURE_NAMES:
+            r = sig[n]
+            results.append(IndicatorResult(n, 0, "turned off for this network")
+                           if enabled.get(n) is False else r)
         return results
 
     def evaluate_all(self, until: Optional[float] = None) -> Dict[Tuple[str, str], List[IndicatorResult]]:

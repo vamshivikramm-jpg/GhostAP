@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Callable, List, Optional
 
-from .parser import parse_frame
+from .parser import parse_event, parse_frame
 from .storage import Store
 
 LIVE_HELP = """\
@@ -32,9 +32,13 @@ On a Mac, use offline mode instead:  python -m ghostap.collector --pcap <file.pc
 """
 
 
+WANTED_SUBTYPES = (8, 5, 12, 10)   # beacon, probe response, deauthentication, disassociation
+
+
 def _is_beacon_or_probe_resp(pkt) -> bool:
-    # Management frames (type 0) with subtype 8 (beacon) or 5 (probe response).
-    return getattr(pkt, "type", None) == 0 and getattr(pkt, "subtype", None) in (8, 5)
+    """Management frames GhostAP reads: beacons and probe responses (observations) plus
+    deauthentication / disassociation frames (attack-activity events, F005)."""
+    return getattr(pkt, "type", None) == 0 and getattr(pkt, "subtype", None) in WANTED_SUBTYPES
 
 
 def collect_pcap(path: str, store: Store, stats: Optional[dict] = None) -> int:
@@ -51,6 +55,12 @@ def collect_pcap(path: str, store: Store, stats: Optional[dict] = None) -> int:
             if obs:
                 store.add(obs)
                 n += 1
+                continue
+            ev = parse_event(pkt, stats)
+            if ev:
+                store.add_event(ev)
+                if stats is not None:
+                    stats["events"] = stats.get("events", 0) + 1
     store.commit()
     return n
 
@@ -60,7 +70,7 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
                  save_pcap: Optional[str] = None, stop: Optional[threading.Event] = None,
                  on_frame: Optional[Callable[[dict], None]] = None,
                  on_status: Optional[Callable[[str], None]] = None,
-                 stats: Optional[dict] = None) -> int:
+                 stats: Optional[dict] = None, focus: Optional[dict] = None) -> int:
     """Sniff beacons / probe responses until `duration` seconds pass or `stop` is set.
 
     hop:       channel list to cycle through (None = stay on the current channel)
@@ -89,8 +99,14 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
                 writer.write(pkt)
             if on_frame:
                 on_frame(obs)
+            return
+        ev = parse_event(pkt, stats)
+        if ev:
+            store.add_event(ev)
+            if writer is not None:
+                writer.write(pkt)
 
-    hopper = ChannelHopper(iface, hop, dwell).start() if hop else None
+    hopper = ChannelHopper(iface, hop, dwell, focus=focus).start() if hop else None
     start = time.time()
     try:
         while not (stop is not None and stop.is_set()):
@@ -112,7 +128,7 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
 
 
 def print_rejected(rejected: dict) -> None:
-    bad = {k: v for k, v in rejected.items() if k != "not_beacon" and v}
+    bad = {k: v for k, v in rejected.items() if k not in ("not_beacon", "events") and v}
     if bad:
         print("[i] skipped damaged frames: " + ", ".join(
             "{} {}".format(v, k.replace("_", " ")) for k, v in sorted(bad.items())))

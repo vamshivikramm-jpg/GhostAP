@@ -5,17 +5,22 @@ different channel from the real AP, so a monitor parked on one channel can miss
 it completely. The hopper cycles the adapter through a channel list with
 `iw dev <iface> set channel <n>`.
 
-Channel lists:  "1,6,11"   "1-13"   "2.4" (1-13)   "5" (common 5 GHz)   "all"
+Channel lists:  "1,6,11"   "1-13"   "2.4" (1-13)   "5" (common 5 GHz)   "6e" (6 GHz
+preferred-scanning channels)   "all" (2.4 + 5 GHz). 6 GHz entries are kept as frequencies
+in MHz (5975, 6055, ...) because 6 GHz channel numbers overlap 2.4 GHz ones; they are
+tuned with `iw dev <iface> set freq`.
 """
 from __future__ import annotations
 
 import subprocess
 import threading
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 BAND_24 = list(range(1, 14))
 BAND_5 = [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128,
           132, 136, 140, 144, 149, 153, 157, 161, 165]
+# 6 GHz preferred scanning channels (PSC), as frequencies in MHz: 5950 + 5 * channel
+BAND_6E = [5950 + 5 * c for c in (5, 21, 37, 53, 69, 85, 101, 117, 133, 149, 165, 181, 197, 213, 229)]
 
 
 def parse_channels(spec: str) -> List[int]:
@@ -28,6 +33,8 @@ def parse_channels(spec: str) -> List[int]:
             chans = BAND_24
         elif part in ("5", "5ghz"):
             chans = BAND_5
+        elif part in ("6e", "6ghz", "6g"):
+            chans = BAND_6E
         elif part == "all":
             chans = BAND_24 + BAND_5
         elif "-" in part:
@@ -38,7 +45,7 @@ def parse_channels(spec: str) -> List[int]:
         else:
             chans = [int(part)]
         for c in chans:
-            if c <= 0 or c > 196:
+            if not (0 < c <= 196 or 5925 <= c <= 7125):
                 raise ValueError("bad channel: {}".format(c))
             if c not in out:
                 out.append(c)
@@ -48,7 +55,9 @@ def parse_channels(spec: str) -> List[int]:
 
 
 def _iw(iface: str, channel: int) -> None:
-    subprocess.run(["iw", "dev", iface, "set", "channel", str(channel)],
+    """Tune to a channel number, or to a frequency in MHz for 6 GHz entries."""
+    what = "freq" if channel >= 5925 else "channel"
+    subprocess.run(["iw", "dev", iface, "set", what, str(channel)],
                    check=True, capture_output=True, timeout=5)
 
 
@@ -60,10 +69,13 @@ class ChannelHopper:
     """
 
     def __init__(self, iface: str, channels: List[int], dwell: float = 0.25,
-                 setter: Optional[Callable[[str, int], None]] = None):
+                 setter: Optional[Callable[[str, int], None]] = None,
+                 focus: Optional[Dict[int, float]] = None):
+        """focus (F043): dwell multiplier per channel, e.g. {6: 3.0} stays 3x longer on 6."""
         self.iface = iface
         self.channels = list(channels)
         self.dwell = dwell
+        self.focus = {int(k): float(v) for k, v in (focus or {}).items() if int(k) in self.channels}
         self._set = setter or _iw
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -102,12 +114,14 @@ class ChannelHopper:
                         type(e).__name__, e)
                     return
                 continue
-            self._stop.wait(self.dwell)
+            self._stop.wait(self.dwell * self.focus.get(ch, 1.0))
 
     def describe(self) -> str:
         if self.error:
             return "hopping stopped: " + self.error
         s = "hopping {} channel(s), {:g} s each".format(len(self.channels), self.dwell)
+        if self.focus:
+            s += ", focus on {}".format(",".join(str(c) for c in sorted(self.focus)))
         if self.current is not None:
             s += ", now on {}".format(self.current)
         if self.dropped:

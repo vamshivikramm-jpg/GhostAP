@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Linux hostapd, default 802.11g config",
+    "kind": "tool",
+    "fingerprints": [
+      "2d29fcb71e42"
+    ],
+    "ouis": [],
+    "source": "synthetic profile from tools/make_test_pcap.py (format example)",
+    "example": true
+  },
+  {
+    "name": "Phone hotspot",
+    "kind": "hotspot",
+    "fingerprints": [
+      "16d15e40415d"
+    ],
+    "ouis": [],
+    "source": "synthetic profile from tools/make_test_pcap.py (format example)",
+    "example": true
+  }
+]

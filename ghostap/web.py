@@ -502,12 +502,15 @@ def main(argv=None) -> int:
 
     # ---- saved baseline (F014): live uses it by default, replays only on request
     monitored = None
+    network_settings = None
     mon_path = None if args.no_monitored else (
         args.monitored or (cfg["monitored_networks"] if args.iface else None))
     if mon_path and os.path.exists(mon_path):
         from . import monitored as monitored_mod
         try:
-            monitored = monitored_mod.baselines(monitored_mod.load(mon_path), cfg["known_bssids"]) or None
+            mdata = monitored_mod.load(mon_path)
+            monitored = monitored_mod.baselines(mdata, cfg["known_bssids"]) or None
+            network_settings = {s: n.get("settings") or {} for s, n in mdata["networks"].items()}
         except (ValueError, OSError) as e:
             print("[!] cannot use saved baseline {}: {}".format(mon_path, e), file=sys.stderr)
             return 2
@@ -522,7 +525,9 @@ def main(argv=None) -> int:
     pipe = Pipeline(db, cfg, pcap=args.pcap, iface=args.iface, speed=args.speed,
                     duration=args.duration, reset=not args.keep if args.db else True, hop=hop,
                     dwell=args.dwell, save_pcap=save_pcap, monitored=monitored,
-                    on_finish=finished).start()
+                    network_settings=network_settings, on_finish=finished,
+                    hop_focus=({c: 3.0 for b in monitored.values() for c in b.channels}
+                               if monitored and hop else None)).start()
     local = is_loopback(args.host)
     token = None if local else (os.environ.get("GHOSTAP_TOKEN") or secrets.token_urlsafe(24))
     admin_db = os.path.join(os.path.dirname(cfg["sessions_dir"].rstrip("/")) or ".", "admin.db")

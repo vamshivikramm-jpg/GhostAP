@@ -1,13 +1,18 @@
 """Turn a captured 802.11 management frame into a flat observation dict.
 
-Only beacon and probe-response frames are handled; everything else is ignored.
+Beacons and probe responses become observations (parse_frame). Deauthentication and
+disassociation frames become attack-activity events (parse_event); for those only the
+AP address, broadcast/unicast and the reason code are kept, never client addresses.
+Everything else is ignored.
 """
 from __future__ import annotations
 
 import hashlib
 from typing import Any, Optional
 
-from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeResp, RadioTap
+from scapy.layers.dot11 import (
+    Dot11, Dot11Beacon, Dot11Deauth, Dot11Disas, Dot11Elt, Dot11ProbeResp, RadioTap,
+)
 
 HIDDEN_SSID = "<hidden>"
 
@@ -84,6 +89,10 @@ def beacon_fingerprint(body) -> Optional[str]:
                 parts.append("{}:{}".format(eid, raw[:_FP_PREFIX_IDS[eid]].hex()))
             elif eid == 221:
                 parts.append("221:{}".format(raw[:4].hex()))   # vendor OUI + type
+            elif eid == 255 and raw:
+                # extension elements (Wi-Fi 6/6E): which ones, plus HE MAC capabilities
+                parts.append("255:{:02x}{}".format(
+                    raw[0], ":" + raw[1:7].hex() if raw[0] == 35 else ""))
             else:
                 parts.append(str(eid))                         # presence and order only
             elt = elt.payload
@@ -93,6 +102,92 @@ def beacon_fingerprint(body) -> Optional[str]:
 
 
 REJECT_REASONS = ("not_beacon", "bad_fcs", "truncated", "malformed")
+
+# ---- RSN (security) details: F004 ------------------------------------------- #
+_CIPHERS = {1: "WEP40", 2: "TKIP", 4: "CCMP", 5: "WEP104", 8: "GCMP", 9: "GCMP-256", 10: "CCMP-256"}
+_AKMS = {1: "802.1X", 2: "PSK", 3: "FT-802.1X", 4: "FT-PSK", 5: "802.1X-SHA256", 6: "PSK-SHA256",
+         8: "SAE", 9: "FT-SAE", 11: "802.1X-B", 12: "802.1X-B192", 18: "OWE", 24: "SAE-EXT", 25: "FT-SAE-EXT"}
+CIPHER_RANK = {"WEP40": 0, "WEP104": 0, "TKIP": 1, "CCMP": 2, "GCMP": 2, "CCMP-256": 3, "GCMP-256": 3}
+
+
+def akm_class(akm: str) -> int:
+    """3 = enterprise (802.1X), 2 = WPA3 personal (SAE/OWE), 1 = password (PSK), 0 = unknown."""
+    if "802.1X" in akm:
+        return 3
+    if akm.startswith(("SAE", "FT-SAE", "OWE")):
+        return 2
+    if "PSK" in akm:
+        return 1
+    return 0
+
+
+def parse_rsn(body) -> Optional[str]:
+    """Compact RSN summary, e.g. 'pw=CCMP;akm=PSK,SAE;pmf=capable', or None without RSN."""
+    elt = body.payload
+    while isinstance(elt, Dot11Elt):
+        if int(elt.ID) == 48:
+            raw = bytes(elt)[2:2 + int(elt.len or 0)]
+            break
+        elt = elt.payload
+    else:
+        return None
+    try:
+        i = 2 + 4                                   # version, group cipher
+        n = int.from_bytes(raw[i:i + 2], "little")
+        i += 2
+        pw = [_CIPHERS.get(raw[i + 4 * k + 3], "?{}".format(raw[i + 4 * k + 3])) for k in range(n)]
+        i += 4 * n
+        n = int.from_bytes(raw[i:i + 2], "little")
+        i += 2
+        akm = [_AKMS.get(raw[i + 4 * k + 3], "?{}".format(raw[i + 4 * k + 3])) for k in range(n)]
+        i += 4 * n
+        caps = int.from_bytes(raw[i:i + 2], "little") if len(raw) >= i + 2 else 0
+        pmf = "required" if caps & 0x40 else "capable" if caps & 0x80 else "none"
+        return "pw={};akm={};pmf={}".format(",".join(pw), ",".join(akm), pmf)
+    except (IndexError, ValueError):
+        return None
+
+
+def rsn_fields(rsn: Optional[str]) -> dict:
+    """'pw=CCMP;akm=PSK;pmf=none' -> {'pw': [...], 'akm': [...], 'pmf': 'none'}"""
+    out = {"pw": [], "akm": [], "pmf": None}
+    for part in (rsn or "").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k] = v if k == "pmf" else [x for x in v.split(",") if x]
+    return out
+
+
+# ---- frequency / band: F009 -------------------------------------------------- #
+
+def _freq(pkt) -> Optional[int]:
+    if not pkt.haslayer(RadioTap):
+        return None
+    f = getattr(pkt[RadioTap], "ChannelFrequency", None)
+    return int(f) if f else None
+
+
+def band_of(freq: Optional[int]) -> Optional[str]:
+    if not freq:
+        return None
+    if 2400 <= freq <= 2500:
+        return "2.4"
+    if 5925 <= freq <= 7125:
+        return "6"
+    if 4900 <= freq < 5925:
+        return "5"
+    return None
+
+
+def channel_from_freq(freq: Optional[int]) -> Optional[int]:
+    b = band_of(freq)
+    if b == "2.4":
+        return 14 if freq == 2484 else (freq - 2407) // 5
+    if b == "5":
+        return (freq - 5000) // 5
+    if b == "6":
+        return (freq - 5950) // 5
+    return None
 
 
 def _bad_fcs(pkt) -> bool:
@@ -160,7 +255,10 @@ def parse_frame(pkt, stats: Optional[dict] = None) -> Optional[dict]:
         if not bssid:
             return reject("malformed")
         info = body.network_stats()
+        freq = _freq(pkt)
         channel = info.get("channel")
+        if channel is None or band_of(freq) == "6":     # 6 GHz numbers overlap 2.4 GHz ones
+            channel = channel_from_freq(freq) if freq else channel
         sc = dot11.SC
         return {
             "ts": float(pkt.time),
@@ -175,6 +273,39 @@ def parse_frame(pkt, stats: Optional[dict] = None) -> Optional[dict]:
             "tsf": int(body.timestamp) if body.timestamp is not None else None,
             "seq": (int(sc) >> 4) if sc is not None else None,
             "fingerprint": beacon_fingerprint(body),
+            "rsn": parse_rsn(body),
+            "freq": freq,
         }
     except Exception:  # anything Scapy cannot make sense of: untrusted radio input
         return reject("malformed")
+
+
+def parse_event(pkt, stats: Optional[dict] = None) -> Optional[dict]:
+    """Deauthentication / disassociation frame -> attack-activity event (F005), else None.
+
+    Privacy: only the AP address (BSSID) is kept, plus whether the frame was sent to
+    everyone (broadcast) and its reason code. Client addresses are never stored.
+    """
+    try:
+        if pkt.haslayer(Dot11Deauth):
+            kind, body = "deauth", pkt[Dot11Deauth]
+        elif pkt.haslayer(Dot11Disas):
+            kind, body = "disassoc", pkt[Dot11Disas]
+        else:
+            return None
+        if _bad_fcs(pkt):
+            if stats is not None:
+                stats["bad_fcs"] = stats.get("bad_fcs", 0) + 1
+            return None
+        d = pkt[Dot11]
+        bssid = (d.addr3 or "").lower()
+        if not bssid or bssid == "ff:ff:ff:ff:ff:ff":
+            return None
+        return {"ts": float(pkt.time), "kind": kind, "bssid": bssid,
+                "broadcast": (d.addr1 or "").lower() == "ff:ff:ff:ff:ff:ff",
+                "reason": int(body.reason) if body.reason is not None else None,
+                "rssi": _rssi(pkt), "freq": _freq(pkt)}
+    except Exception:
+        if stats is not None:
+            stats["malformed"] = stats.get("malformed", 0) + 1
+        return None

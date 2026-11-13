@@ -134,7 +134,7 @@ def test_ap_detail_has_comparison_data(client):
     assert all(s["uptime_first_seen"] > 3600 for s in d["siblings"])
     assert not set(d["ap"]["fingerprints"]) & {f for s in d["siblings"] for f in s["fingerprints"]}
     assert d["alert"]["level"] == "HIGH" and d["baseline_alert"] is not None
-    assert d["latest"]["level"] == "HIGH" and len(d["latest"]["indicators"]) == 8
+    assert d["latest"]["level"] == "HIGH" and len(d["latest"]["indicators"]) == 11   # 8 + 3 signatures
     legit = client.get("/api/ap?ssid=Cafe_Guest&bssid=f0:9f:c2:aa:bb:cc").get_json()
     assert legit["alert"] is None and legit["siblings"] == [] and legit["latest"]["level"] == "LOW"
     assert client.get("/api/ap?ssid=Nope&bssid=00:00:00:00:00:00").status_code == 404

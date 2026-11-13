@@ -51,19 +51,19 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 
 | ID | Feature | Phase | Status |
 |---|---|---|---|
-| F001 | KARMA / MANA attack detection | B | todo |
-| F002 | Look-alike network names | B | todo |
-| F003 | Attack-tool fingerprint library | B | todo |
-| F004 | Detailed security downgrade | B | todo |
-| F005 | Deauthentication flood detection | B | todo |
-| F006 | Two transmitters, one address | B | todo |
-| F007 | Beacon clock-skew fingerprint | B | todo |
-| F008 | Beacon-rate anomaly | B | todo |
-| F009 | Wi-Fi 6 / 6E awareness | B | todo |
-| F010 | Passive hidden-network matching | B | todo |
-| F011 | Per-network sensitivity | B | todo |
-| F012 | Incident correlation | B | todo |
-| F013 | Alert throttling and re-alerting | B | todo |
+| F001 | KARMA / MANA attack detection | B | done |
+| F002 | Look-alike network names | B | done |
+| F003 | Attack-tool fingerprint library | B | done* |
+| F004 | Detailed security downgrade | B | done |
+| F005 | Deauthentication flood detection | B | done* |
+| F006 | Two transmitters, one address | B | done |
+| F007 | Beacon clock-skew fingerprint | B | done* |
+| F008 | Beacon-rate anomaly | B | done |
+| F009 | Wi-Fi 6 / 6E awareness | B | done* |
+| F010 | Passive hidden-network matching | B | done |
+| F011 | Per-network sensitivity | B | done |
+| F012 | Incident correlation | B | API done, card in D |
+| F013 | Alert throttling and re-alerting | E | todo (moved: throttling belongs with notifications) |
 | F014 | Saved network baselines | A | done |
 | F015 | Monitored Networks page | C | todo |
 | F016 | Baseline wizard | C | todo |
@@ -92,8 +92,8 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F039 | Table export and columns | D | todo |
 | F040 | Sessions page | A | API done, page in D |
 | F041 | Capture control panel | J | todo |
-| F042 | Capture quality panel | B | todo |
-| F043 | Smart channel hopping | B | todo |
+| F042 | Capture quality panel | B | API done, panel in D |
+| F043 | Smart channel hopping | B | done |
 | F044 | Several sensors | J | todo |
 | F045 | Rough location | J | todo |
 | F046 | Labelling page | G | todo |

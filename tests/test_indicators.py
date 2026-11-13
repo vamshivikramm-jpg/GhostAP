@@ -49,7 +49,8 @@ def as_dict(results):
 
 def test_every_indicator_reported(analyzer):
     res = analyzer.evaluate(*EVIL)
-    assert [r.name for r in res] == list(INDICATOR_NAMES)
+    from ghostap.signatures import SIGNATURE_NAMES
+    assert [r.name for r in res] == list(INDICATOR_NAMES) + list(SIGNATURE_NAMES)
     for r in res:
         assert 0.0 <= r.value <= 1.0
         assert isinstance(r.reason, str) and r.reason

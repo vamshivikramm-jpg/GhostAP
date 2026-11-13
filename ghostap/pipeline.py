@@ -20,9 +20,11 @@ from typing import List, Optional
 
 from .collector import LIVE_HELP, collect_live
 from .logs import get_logger
-from .indicators import Analyzer
-from .parser import parse_frame
-from .risk import DuplicateSSIDDetector, RiskEngine, duplicate_ssid_detector, load_config
+from .parser import parse_event, parse_frame
+from .risk import (
+    DeauthDetector, DuplicateSSIDDetector, FloodDetector, RiskEngine, analyzer_for,
+    duplicate_ssid_detector, load_config,
+)
 from .storage import Store
 
 log = get_logger("pipeline")
@@ -33,7 +35,7 @@ def rescore(db: str, config: dict) -> dict:
     with Store(db) as store:
         store.rebuild_profiles()
         obs = store.observations()
-    an = Analyzer(obs, config["baseline_minutes"], config.get("known_bssids") or ())
+    an = analyzer_for(config, obs)
     report = RiskEngine(an, config).run()
     base = duplicate_ssid_detector(obs)
     with Store(db) as store:
@@ -47,14 +49,18 @@ def rescore(db: str, config: dict) -> dict:
 class IncrementalScorer:
     """Keeps an Analyzer / RiskEngine alive and feeds it only new database rows."""
 
-    def __init__(self, db: str, config: dict, monitored: Optional[dict] = None):
+    def __init__(self, db: str, config: dict, monitored: Optional[dict] = None,
+                 network_settings: Optional[dict] = None):
         self.db = db
         self.config = config
-        self.analyzer = Analyzer((), config["baseline_minutes"], config.get("known_bssids") or (),
-                                 monitored=monitored)
+        self.analyzer = analyzer_for(config, (), monitored=monitored, network_settings=network_settings)
         self.engine = RiskEngine(self.analyzer, config)
         self.duplicates = DuplicateSSIDDetector()
+        self.deauth = DeauthDetector(config.get("detection"))
+        self.flood = FloodDetector(config.get("detection"),
+                                   warmup=0 if monitored else config["baseline_minutes"] * 60)
         self.last_id = 0
+        self.last_event_id = 0
         self._last_prune_ts: Optional[float] = None
         self.pruned = 0
 
@@ -62,20 +68,25 @@ class IncrementalScorer:
         with Store(self.db) as store:
             first_round = self.last_id == 0
             new, self.last_id = store.observations_after(self.last_id)
-            if not new and not final:
+            events, self.last_event_id = store.events_after(self.last_event_id)
+            if not new and not events and not final:
                 return {"new_frames": 0, "new_rows": 0, "alerts": None}   # idle: nothing to do
             if first_round:
                 store.clear_profiles()           # profiles are rebuilt from what we read
             self.analyzer.add(new)
             self.duplicates.update(new)
+            self.flood.update(new)
+            self.deauth.update(events)
             report = self.engine.run(final=final)
             store.update_profiles(new)
             store.append_timeline(report.timeline)
             store.save_latest(report.latest)
             store.save_alerts("ghostap", report.alerts)
             store.save_alerts("baseline", self.duplicates.alerts())
+            store.save_alerts("deauth", self.deauth.alerts(self.analyzer.names_of))
+            store.save_alerts("flood", self.flood.alerts())
             self._retention(store)
-        return {"new_frames": len(new), "new_rows": len(report.timeline),
+        return {"new_frames": len(new) + len(events), "new_rows": len(report.timeline),
                 "alerts": len(report.alerts)}
 
     def _retention(self, store: Store) -> None:
@@ -103,10 +114,13 @@ class Pipeline:
                  duration: Optional[float] = None, rescore_seconds: float = 2.0,
                  reset: bool = True, hop: Optional[List[int]] = None, dwell: float = 0.25,
                  save_pcap: Optional[str] = None, monitored: Optional[dict] = None,
-                 on_finish=None):
+                 on_finish=None, network_settings: Optional[dict] = None,
+                 hop_focus: Optional[dict] = None):
         """monitored: saved baselines (F014) to use from the first frame.
         on_finish(status): called once ingest and the final scoring round are done."""
         self.monitored = monitored
+        self.network_settings = network_settings
+        self.hop_focus = hop_focus
         self.on_finish = on_finish
         if pcap and iface:
             raise ValueError("use either pcap or iface, not both")
@@ -178,7 +192,7 @@ class Pipeline:
     # -- internals ---------------------------------------------------------- #
 
     def _damaged(self) -> dict:
-        return {k: v for k, v in self._rejected.items() if k != "not_beacon" and v}
+        return {k: v for k, v in self._rejected.items() if k not in ("not_beacon", "events") and v}
 
     def _set(self, **kw) -> None:
         with self._lock:
@@ -201,6 +215,9 @@ class Pipeline:
                         break
                     obs = parse_frame(pkt, self._rejected)
                     if not obs:
+                        ev = parse_event(pkt, self._rejected)
+                        if ev:
+                            store.add_event(ev)
                         continue
                     if ts0 is None:
                         ts0 = obs["ts"]
@@ -239,7 +256,7 @@ class Pipeline:
             n = collect_live(self.iface, self.duration, store, hop=self.hop, dwell=self.dwell,
                              save_pcap=self.save_pcap, stop=self._stop, on_frame=on_frame,
                              on_status=lambda m: self._set(hopping=m, rejected=self._damaged()),
-                             stats=self._rejected)
+                             stats=self._rejected, focus=self.hop_focus)
             msg = "live capture finished ({} frames)".format(n)
             if self.save_pcap:
                 msg += "; saved to {}".format(self.save_pcap)
@@ -252,7 +269,7 @@ class Pipeline:
             self._ingest_done.set()
 
     def _score_loop(self) -> None:
-        scorer = IncrementalScorer(self.db, self.config, self.monitored)
+        scorer = IncrementalScorer(self.db, self.config, self.monitored, self.network_settings)
         log.info("scoring started (%s: %s)%s", self.status["mode"], self.status["source"],
                  " with %d monitored network(s)" % len(self.monitored) if self.monitored else "")
         while True:

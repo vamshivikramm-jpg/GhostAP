@@ -8,8 +8,9 @@ from typing import List, Optional, Tuple
 
 OBS_FIELDS = (
     "ts", "frame_type", "ssid", "bssid", "oui", "channel",
-    "security", "rssi", "beacon_interval", "tsf", "seq", "fingerprint",
+    "security", "rssi", "beacon_interval", "tsf", "seq", "fingerprint", "rsn", "freq",
 )
+EVENT_FIELDS = ("ts", "kind", "bssid", "broadcast", "reason", "rssi", "freq")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS observations (
@@ -25,8 +26,23 @@ CREATE TABLE IF NOT EXISTS observations (
     beacon_interval INTEGER,
     tsf             INTEGER,
     seq             INTEGER,
-    fingerprint     TEXT
+    fingerprint     TEXT,
+    rsn             TEXT,             -- 'pw=CCMP;akm=PSK;pmf=none' (F004)
+    freq            INTEGER           -- MHz from the radio header (F009)
 );
+
+-- F005: deauthentication / disassociation frames (AP address only, no client addresses)
+CREATE TABLE IF NOT EXISTS events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         REAL    NOT NULL,
+    kind       TEXT    NOT NULL,      -- deauth | disassoc
+    bssid      TEXT    NOT NULL,
+    broadcast  INTEGER,
+    reason     INTEGER,
+    rssi       INTEGER,
+    freq       INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_events_bssid ON events(bssid, ts);
 CREATE INDEX IF NOT EXISTS idx_obs_ssid  ON observations(ssid);
 CREATE INDEX IF NOT EXISTS idx_obs_bssid ON observations(bssid);
 
@@ -147,8 +163,9 @@ class Store:
     def _migrate(self) -> None:
         """Add columns introduced after a database was created (older GhostAP versions)."""
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(observations)")}
-        if "fingerprint" not in cols:
-            self.conn.execute("ALTER TABLE observations ADD COLUMN fingerprint TEXT")
+        for col, decl in (("fingerprint", "TEXT"), ("rsn", "TEXT"), ("freq", "INTEGER")):
+            if col not in cols:
+                self.conn.execute("ALTER TABLE observations ADD COLUMN {} {}".format(col, decl))
         pcols = {r[1] for r in self.conn.execute("PRAGMA table_info(ap_profiles)")}
         if "rssi_n" not in pcols:
             self.conn.execute("ALTER TABLE ap_profiles ADD COLUMN rssi_n INTEGER")
@@ -164,6 +181,24 @@ class Store:
         self._pending += 1
         if self._pending >= self.BATCH_SIZE:
             self.commit()
+
+    def add_event(self, ev: dict) -> None:
+        """F005: one deauthentication / disassociation frame."""
+        self.conn.execute(
+            "INSERT INTO events ({}) VALUES ({})".format(
+                ", ".join(EVENT_FIELDS), ", ".join("?" for _ in EVENT_FIELDS)),
+            tuple(int(ev[f]) if f == "broadcast" else ev.get(f) for f in EVENT_FIELDS))
+        self._pending += 1
+        if self._pending >= self.BATCH_SIZE:
+            self.commit()
+
+    def events_after(self, last_id: int = 0) -> Tuple[List[dict], int]:
+        rows = self.conn.execute(
+            "SELECT id, {} FROM events WHERE id > ? ORDER BY id".format(", ".join(EVENT_FIELDS)),
+            (last_id,)).fetchall()
+        if not rows:
+            return [], last_id
+        return [{k: r[k] for k in EVENT_FIELDS} for r in rows], rows[-1]["id"]
 
     def commit(self) -> None:
         self.conn.commit()
@@ -236,7 +271,7 @@ class Store:
 
     def reset(self) -> None:
         with self.conn:
-            for table in ("observations", "ap_profiles", "alerts", "risk_timeline", "ap_latest"):
+            for table in ("observations", "ap_profiles", "alerts", "risk_timeline", "ap_latest", "events"):
                 self.conn.execute("DELETE FROM {}".format(table))
 
     def profiles(self) -> List[dict]:

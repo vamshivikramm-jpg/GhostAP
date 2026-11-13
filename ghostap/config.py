@@ -40,6 +40,21 @@ DEFAULT_CONFIG: dict = {
         "check_minutes": 10.0,        # how often pruning runs during a live session
     },
     "logging": {"file": "data/logs/ghostap.log", "level": "INFO"},
+    # Attack signatures (F001-F003): a match raises the AP's score to at least this value.
+    "signatures": {"karma": 70.0, "known_tool": 70.0, "lookalike_ssid": 40.0},
+    "attack_tools_file": "data/attack_tools.json",   # your lab-recorded tool fingerprints
+    "detection": {
+        "karma_min_ssids": 3,              # one radio answering for this many names = KARMA
+        "lookalike_max_distance": 2,       # edits allowed between look-alike names
+        "signal_track_gap_db": 12.0,       # F006: two signal levels this far apart = 2 radios
+        "beacon_rate_tolerance": 0.5,      # F008: flag beaconing > (1 + this) x advertised rate
+        "clock_skew_tolerance_ppm": 10.0,  # F007: clock drift change that counts
+        "deauth_window_seconds": 10.0,     # F005
+        "deauth_medium": 10,               #   frames per window for MEDIUM
+        "deauth_high": 30,                 #   ... and for HIGH
+        "flood_new_aps_per_minute": 30,    # F008: many new radios at once = beacon flood
+        "use_example_signatures": False,   # enable the synthetic example tool signatures
+    },
 }
 
 _LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -120,6 +135,17 @@ def validate(cfg: dict) -> dict:
         ok = isinstance(b, str) and len(b) == 17 and all(
             len(p) == 2 and all(c in "0123456789abcdefABCDEF" for c in p) for p in b.split(":"))
         need(ok, "known_bssids: {!r} is not a MAC address like a4:2b:b0:11:22:33".format(b))
+    for k, v in cfg["signatures"].items():
+        need(0 <= v <= 100, "signatures.{} must be between 0 and 100".format(k))
+    d = cfg["detection"]
+    for k in ("karma_min_ssids", "deauth_medium", "deauth_high", "flood_new_aps_per_minute",
+              "lookalike_max_distance"):
+        need(d[k] >= 0, "detection.{} cannot be negative".format(k))
+    need(d["karma_min_ssids"] >= 2, "detection.karma_min_ssids must be at least 2")
+    need(d["deauth_medium"] <= d["deauth_high"], "detection.deauth_medium must not exceed deauth_high")
+    for k in ("signal_track_gap_db", "beacon_rate_tolerance", "clock_skew_tolerance_ppm",
+              "deauth_window_seconds"):
+        need(d[k] > 0, "detection.{} must be greater than 0".format(k))
     r = cfg["retention"]
     need(r["raw_hours"] >= 0, "retention.raw_hours cannot be negative (0 keeps everything)")
     need(r["check_minutes"] > 0, "retention.check_minutes must be greater than 0")
