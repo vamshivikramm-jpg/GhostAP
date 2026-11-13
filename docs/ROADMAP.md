@@ -65,11 +65,11 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F012 | Incident correlation | B | API done, card in D |
 | F013 | Alert throttling and re-alerting | E | todo (moved: throttling belongs with notifications) |
 | F014 | Saved network baselines | A | done |
-| F015 | Monitored Networks page | C | todo |
-| F016 | Baseline wizard | C | todo |
-| F017 | Accept a change into the baseline | C | todo |
-| F018 | New-network inbox | C | todo |
-| F019 | Allow-list editor | C | todo |
+| F015 | Monitored Networks page | C | done |
+| F016 | Baseline wizard | C | done |
+| F017 | Accept a change into the baseline | C | done |
+| F018 | New-network inbox | C | done |
+| F019 | Allow-list editor | C | done |
 | F020 | Incident story card | D | todo |
 | F021 | Sensor heartbeat | D | todo |
 | F022 | Customisable layout | D | todo |
@@ -84,8 +84,8 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F031 | What-if weights | D | todo |
 | F032 | Evidence pcap download | D | todo |
 | F033 | Related access points | D | todo |
-| F034 | Network health card | C | todo |
-| F035 | Network risk score | C | todo |
+| F034 | Network health card | C | done |
+| F035 | Network risk score | C | done |
 | F036 | Clock time and time ranges | D | todo |
 | F037 | Timeline annotations | D | todo |
 | F038 | Large-site performance | D | todo |

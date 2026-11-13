@@ -107,6 +107,56 @@ def add_ap(data: dict, ssid: str, ap: dict) -> None:
         net["security"] = ap["security"]
 
 
+def remove_ap(data: dict, ssid: str, bssid: str) -> bool:
+    """Take one access point out of a network's baseline."""
+    net = data["networks"].get(ssid)
+    b = bssid.lower()
+    if not net or b not in net["bssids"]:
+        return False
+    net["bssids"] = [x for x in net["bssids"] if x != b]
+    for key in ("bssid_channels", "bssid_rssi", "bssid_fingerprints", "bssid_skew"):
+        net.get(key, {}).pop(b, None)
+    net["ouis"] = sorted({x[:8] for x in net["bssids"]})
+    net["channels"] = sorted({c for cs in net["bssid_channels"].values() for c in cs})
+    net["fingerprints"] = sorted({f for fs in net["bssid_fingerprints"].values() for f in fs})
+    rs = [v[0] for v in net["bssid_rssi"].values()]
+    net["rssi_ref"] = max(rs) if rs else None
+    return True
+
+
+INBOX_DECISIONS = ("approved", "ignored")
+
+
+def set_decision(data: dict, ssid: str, decision: Optional[str]) -> None:
+    """F018: remember that a newly seen network was approved or ignored (None = undecided)."""
+    inv = data.setdefault("inventory", {})
+    if decision is None:
+        inv.pop(ssid, None)
+    elif decision in INBOX_DECISIONS:
+        inv[ssid] = {"decision": decision, "at": time.time()}
+    else:
+        raise ValueError("decision must be one of " + ", ".join(INBOX_DECISIONS))
+
+
+def validate_settings(settings: dict) -> dict:
+    """F011 per-network settings coming from the dashboard."""
+    from .signatures import SIGNATURE_NAMES
+    out = default_settings()
+    known = set(INDICATOR_NAMES) | set(SIGNATURE_NAMES)
+    for name, on in (settings.get("enabled") or {}).items():
+        if name not in known or not isinstance(on, bool):
+            raise ValueError("unknown check or value: {!r}".format(name))
+        out["enabled"][name] = on
+    for n in SIGNATURE_NAMES:
+        out["enabled"].setdefault(n, True)
+    med = settings.get("threshold_medium")
+    if med is not None:
+        if isinstance(med, bool) or not isinstance(med, (int, float)) or not 1 <= med <= 99:
+            raise ValueError("threshold_medium must be between 1 and 99, or empty")
+        out["threshold_medium"] = float(med)
+    return out
+
+
 def main(argv=None) -> int:
     from .config import ConfigError, load_config
     from .storage import Store

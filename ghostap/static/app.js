@@ -98,10 +98,38 @@
     const i = state.colorOf.get(k);
     return i < SLOTS ? css("--s" + (i + 1)) : css("--s-other");
   }
+  // Every API call carries ?session=<id> while a past session is being viewed.
+  function withSession(url) {
+    if (!state.session) return url;
+    return url + (url.includes("?") ? "&" : "?") + "session=" + encodeURIComponent(state.session);
+  }
   async function get(url) {
-    const r = await fetch(url, { cache: "no-store", credentials: "same-origin" });
+    const r = await fetch(withSession(url), { cache: "no-store", credentials: "same-origin" });
     if (!r.ok) { const e = new Error(url + " -> " + r.status); e.status = r.status; throw e; }
     return r.json();
+  }
+  /** POST JSON; resolves to {ok, status, data} and never throws on HTTP errors. */
+  async function post(url, body) {
+    try {
+      const r = await fetch(withSession(url), {
+        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+      let data = null;
+      try { data = await r.json(); } catch (e) { /* empty body */ }
+      return { ok: r.ok, status: r.status, data };
+    } catch (e) {
+      return { ok: false, status: 0, data: { error: "GhostAP server not reachable" } };
+    }
+  }
+  /** Short status message in the corner (not an alert toast). */
+  function notice(text, kind) {
+    const t = document.createElement("div");
+    t.className = "toast notice " + (kind || "");
+    t.setAttribute("role", "status");
+    t.innerHTML = `<div>${esc(text)}</div>`;
+    $("toasts").appendChild(t);
+    setTimeout(() => t.remove(), 5000);
   }
   const ssidLabel = (s) => (s === "<hidden>" ? "Hidden network" : s);
   function changed(name, data) {
@@ -476,7 +504,11 @@
       <div class="d-head">
         <div>
           <h2 class="d-title">${esc(ssidLabel(ap.ssid))} <span class="mono muted">${esc(ap.bssid)}</span></h2>
-          <div class="d-tags">${tags}<button class="btn small" data-export title="Download a Markdown write-up of this access point (for your report or notes)">Export report</button></div>
+          <div class="d-tags">${tags}
+            <span class="row-actions" style="margin-left:auto">
+              ${ap.ssid !== "<hidden>" ? `<button class="btn small" data-accept-baseline title="It is ours: add it to ${esc(ap.ssid)}'s saved baseline so it stops alerting">Accept into baseline</button>` : ""}
+              ${ap.allowlisted ? "" : '<button class="btn small" data-trust title="Add to the allow-list: not treated as new, but cloning it is still detected">Trust this AP</button>'}
+              <button class="btn small" data-export title="Download a Markdown write-up of this access point (for your report or notes)">Export report</button></span></div>
           <div class="why ${esc(level || "")}"><b>${esc(whatIs)}</b>
             ${hits.length ? `<span class="muted">${alert ? "At its peak (" + rel(alert.peak_ts) + ") the main reasons were:" : "What raised the score:"}</span><ul>${whyList}</ul>`
               : `<span class="muted">${inds.length ? "None of the eight checks found anything unusual about this access point." : "Scoring starts after the learning period."}</span>`}
@@ -556,6 +588,18 @@
   // detail interactions (event delegation; survives re-render)
   $("detail").addEventListener("click", async (e) => {
     if (e.target.closest("[data-export]") && state.detail) { exportReport(state.detail); return; }
+    if (e.target.closest("[data-accept-baseline]") && state.detail) {
+      const a = state.detail.ap;
+      const r = await post("/api/monitored/accept", { ssid: a.ssid, bssid: a.bssid });
+      notice(r.ok ? `${a.bssid} added to ${a.ssid}'s saved baseline.` : (r.data && r.data.error) || "Could not save", r.ok ? "ok" : "error");
+      return;
+    }
+    if (e.target.closest("[data-trust]") && state.detail) {
+      const r = await post("/api/allowlist", { add: state.detail.ap.bssid });
+      notice(r.ok ? `${state.detail.ap.bssid} is now trusted.` : (r.data && r.data.error) || "Could not save", r.ok ? "ok" : "error");
+      if (r.ok) { delete state.last.detail; loadDetail(); }
+      return;
+    }
     const tb = e.target.closest("[data-triage]");
     if (tb) {
       tb.parentElement.querySelectorAll(".seg-btn").forEach((b) => { b.classList.toggle("active", b === tb); b.setAttribute("aria-pressed", b === tb); });
@@ -564,10 +608,8 @@
     if (e.target.id === "triage-save") {
       const box = e.target.closest(".triage");
       const active = box.querySelector(".seg-btn.active");
-      const r = await fetch(`/api/alerts/${box.dataset.alert}/triage`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: active ? active.dataset.triage : "new", note: $("triage-note").value }),
-      });
+      const r = await post(`/api/alerts/${box.dataset.alert}/triage`,
+        { status: active ? active.dataset.triage : "new", note: $("triage-note").value });
       $("triage-saved").textContent = r.ok ? "Saved " + new Date().toLocaleTimeString() : "Could not save (" + r.status + ")";
       refresh(true, true);
     }
@@ -844,5 +886,70 @@
     $("baseline-progress").hidden = true;
   }
   function schedule(ms) { clearTimeout(timer); timer = setTimeout(() => refresh(false), ms); }
+
+  // ------------------------------------------------------------------ pages (router)
+  // Other pages live in static/views/*.js and register themselves in GA.views.
+  const views = {};
+  let currentView = "dashboard";
+  function viewFromHash() {
+    const h = location.hash.replace(/^#/, "");
+    if (!h || h.startsWith("ap=")) return "dashboard";
+    const name = h.split(/[?&=]/)[0];
+    return views[name] ? name : "dashboard";
+  }
+  function renderNav() {
+    const items = [["dashboard", "Dashboard"], ...Object.entries(views).map(([k, v]) => [k, v.title])];
+    $("nav").innerHTML = items.map(([k, t]) =>
+      `<a href="#${k === "dashboard" ? "" : k}" class="nav-link ${k === currentView ? "active" : ""}" ${k === currentView ? 'aria-current="page"' : ""}>${esc(t)}</a>`).join("");
+  }
+  function route() {
+    const name = viewFromHash();
+    const prev = currentView;
+    currentView = name;
+    document.querySelector('[data-view="dashboard"]').hidden = name !== "dashboard";
+    const root = $("view-root");
+    root.hidden = name === "dashboard";
+    if (prev !== name && views[prev] && views[prev].hide) views[prev].hide();
+    if (name !== "dashboard") {
+      root.innerHTML = "";
+      views[name].show(root);
+      document.title = views[name].title + " · GhostAP";
+    }
+    renderNav();
+    renderSessionBanner();
+  }
+  window.addEventListener("hashchange", route);
+  function renderSessionBanner() {
+    const b = $("session-banner");
+    if (!state.session) { b.hidden = true; return; }
+    b.hidden = false;
+    b.innerHTML = `Viewing saved session <b>${esc(state.sessionName || state.session)}</b>. Changes such as triage are saved into that session. <button class="btn small" data-live>Back to the current session</button>`;
+  }
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("[data-live]")) setSession(null, null);
+  });
+  /** Switch every page to a past session (id) or back to the current one (null). */
+  function setSession(id, name) {
+    state.session = id;
+    state.sessionName = name;
+    try { sessionStorage.setItem("ghostap-session", JSON.stringify(id ? [id, name] : null)); } catch (e) { /* ignore */ }
+    state.version = null; state.sel = null; state.last = {}; state.known = null;
+    state.colorOf = new Map();
+    renderSessionBanner();
+    if (currentView !== "dashboard" && views[currentView]) { $("view-root").innerHTML = ""; views[currentView].show($("view-root")); }
+    refresh(true, true);
+  }
+  try {
+    const saved = JSON.parse(sessionStorage.getItem("ghostap-session") || "null");
+    if (saved) { state.session = saved[0]; state.sessionName = saved[1]; }
+  } catch (e) { /* ignore */ }
+
+  window.GA = {
+    state, views, $, esc, css, rel, fmt, lvl, label, ssidLabel, IND, get, post, notice, uptime,
+    select: (ssid, bssid) => { location.hash = ""; select(ssid, bssid, true); },
+    refresh: () => refresh(true, true), setSession, route,
+    register(name, view) { views[name] = view; renderNav(); if (viewFromHash() === name) route(); },
+  };
+  renderNav();
   refresh(false);
 })();

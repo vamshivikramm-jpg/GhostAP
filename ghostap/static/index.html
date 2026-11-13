@@ -19,6 +19,7 @@
         <span class="tagline">Passive Evil Twin detector</span>
       </div>
     </div>
+    <nav class="nav" id="nav" aria-label="Pages"></nav>
     <div class="status" id="status" aria-live="polite">connecting…</div>
     <div class="top-actions">
       <button class="icon-btn" id="help-btn" title="How GhostAP works (?)" aria-label="How GhostAP works">
@@ -32,6 +33,9 @@
   </header>
 
   <main>
+    <div class="session-banner" id="session-banner" hidden></div>
+    <div class="view-root" id="view-root" hidden></div>
+    <div class="view" data-view="dashboard">
     <section class="verdict" id="verdict" aria-live="polite">
       <div class="verdict-icon" id="verdict-icon"></div>
       <div class="verdict-text">
@@ -121,6 +125,7 @@
         </table>
       </div>
     </section>
+    </div>
   </main>
 
   <footer>Passive monitoring only: GhostAP listens to beacon and probe-response frames and never transmits. Use it only on networks you own or are authorised to monitor.</footer>
@@ -142,5 +147,6 @@
 
   <div class="toasts" id="toasts" aria-live="assertive"></div>
   <script src="/static/app.js"></script>
+  <script src="/static/views/monitored.js"></script>
 </body>
 </html>

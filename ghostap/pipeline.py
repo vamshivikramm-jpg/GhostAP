@@ -191,6 +191,33 @@ class Pipeline:
 
     # -- internals ---------------------------------------------------------- #
 
+    # ---- live updates from the dashboard (F017, F019, F011) ----------------------- #
+
+    def update_monitored(self, monitored: dict, network_settings: dict) -> None:
+        """Apply an edited saved baseline to the running capture immediately."""
+        self.monitored, self.network_settings = monitored, network_settings
+        scorer = getattr(self, "_scorer", None)
+        if scorer is None:
+            return
+        an = scorer.analyzer
+        for ssid, base in (monitored or {}).items():
+            base.allowlist = an.baseline.allowlist
+            an.baseline.ssids[ssid] = base
+        an.monitored = dict(monitored or {})
+        an.network_settings = dict(network_settings or {})
+
+    def update_allowlist(self, bssids) -> None:
+        scorer = getattr(self, "_scorer", None)
+        if scorer is None:
+            return
+        new = {b.lower() for b in bssids}
+        an = scorer.analyzer
+        for s in {id(an.allowlist): an.allowlist, id(an.baseline.allowlist): an.baseline.allowlist}.values():
+            s.clear()
+            s.update(new)
+        for base in an.baseline.ssids.values():
+            base.allowlist = an.baseline.allowlist
+
     def _damaged(self) -> dict:
         return {k: v for k, v in self._rejected.items() if k not in ("not_beacon", "events") and v}
 
@@ -270,6 +297,7 @@ class Pipeline:
 
     def _score_loop(self) -> None:
         scorer = IncrementalScorer(self.db, self.config, self.monitored, self.network_settings)
+        self._scorer = scorer
         log.info("scoring started (%s: %s)%s", self.status["mode"], self.status["source"],
                  " with %d monitored network(s)" % len(self.monitored) if self.monitored else "")
         while True:

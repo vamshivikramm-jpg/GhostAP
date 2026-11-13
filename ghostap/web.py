@@ -85,7 +85,8 @@ def _plotly_js() -> Optional[str]:
 def create_app(db: str, config: Optional[dict] = None,
                pipeline: Optional[Pipeline] = None, token: Optional[str] = None,
                local_only: bool = True, sessions: Optional[SessionStore] = None,
-               current_session: Optional[str] = None, admin_db: Optional[str] = None) -> Flask:
+               current_session: Optional[str] = None, admin_db: Optional[str] = None,
+               config_path: Optional[str] = "config.yaml", monitored_path: Optional[str] = None) -> Flask:
     """Build the Flask app.
 
     local_only: refuse requests whose Host header is not a loopback name/address
@@ -182,7 +183,9 @@ def create_app(db: str, config: Optional[dict] = None,
     ctx = SimpleNamespace(cfg=cfg, db=db, pipeline=pipeline, sessions=sessions, started=started,
                           current_session=current_session, admin_db=admin_db or db,
                           store=store, status=status, db_path=db_path, actor=actor,
-                          json_body=json_body, audit=audit, viewed_session=viewed_session)
+                          json_body=json_body, audit=audit, viewed_session=viewed_session,
+                          config_path=config_path,
+                          monitored_path=monitored_path or cfg.get("monitored_networks") or "data/monitored.json")
     app.extensions["ghostap"] = ctx
 
     # -- pages -------------------------------------------------------------- #
@@ -389,6 +392,8 @@ def create_app(db: str, config: Optional[dict] = None,
 
     from . import web_admin
     web_admin.register(app, ctx)
+    from . import web_monitored
+    web_monitored.register(app, ctx)
 
     @app.get("/api/timeline")
     def timeline():
@@ -532,7 +537,8 @@ def main(argv=None) -> int:
     token = None if local else (os.environ.get("GHOSTAP_TOKEN") or secrets.token_urlsafe(24))
     admin_db = os.path.join(os.path.dirname(cfg["sessions_dir"].rstrip("/")) or ".", "admin.db")
     app = create_app(db, cfg, pipe, token=token, local_only=local, sessions=sessions,
-                     current_session=session.id if session else None, admin_db=admin_db)
+                     current_session=session.id if session else None, admin_db=admin_db,
+                     config_path=args.config, monitored_path=args.monitored or cfg["monitored_networks"])
     mode = pipe.status["mode"]
     log.info("dashboard start: mode=%s source=%s session=%s monitored=%s host=%s port=%s",
              mode, pipe.status["source"], session.id if session else db,
