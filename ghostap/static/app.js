@@ -1277,6 +1277,7 @@
 
   // ------------------------------------------------------------------ polling
   let timer = null;
+  const hooks = [];                 // extra scripts (presentation mode) run after every refresh
   async function refresh(once, force) {
     try {
       const summary = await get("/api/summary");
@@ -1288,6 +1289,7 @@
         summary.aps, summary.status.state, summary.status.message,
         Math.round((summary.capture_end || 0) - (summary.capture_start || 0))])) renderVerdict(summary);
       renderTiles(summary);
+      hooks.forEach((h) => { try { h(summary); } catch (err) { console.error(err); } });
 
       // The heavy lists only change when the server's data version changes.
       if (force || summary.data_version !== state.version) {
@@ -1396,7 +1398,10 @@
   window.GA = {
     state, views, $, esc, css, rel, fmt, lvl, label, ssidLabel, IND, get, post, notice, uptime,
     select: (ssid, bssid) => { location.hash = ""; select(ssid, bssid, true); },
-    refresh: () => refresh(true, true), setSession, route,
+    refresh: () => refresh(true, true), setSession, route, onRefresh: (fn) => hooks.push(fn),
+    openHelp: () => openHelp(), openLayout: () => { applyLayout(); $("layout-dlg").showModal(); },
+    toggleClock: () => $("clock-btn").click(), toggleTheme: () => $("theme-btn").click(),
+    exportCsv: () => $("export-csv").click(), tableRows: () => tableRows(),
     register(name, view) { views[name] = view; renderNav(); if (viewFromHash() === name) route(); },
   };
   state.clock = store.get("ghostap-clock") === "1";

@@ -515,3 +515,23 @@ details.menu > summary::-webkit-details-marker { display: none; }
 .ap-table.hide-c10 tr > :nth-child(10) { display: none; }
 .clock .events li { grid-template-columns: 150px 112px 1fr; }
 .more-row { text-align: center; color: var(--muted); padding: 10px; }
+
+/* F090 presentation mode */
+body.present { font-size: 17px; padding-bottom: 120px; }
+body.present .topbar .top-actions > :not([data-present]), body.present footer, body.present [data-panel="table"],
+body.present .events-head, body.present .events, body.present .note-form, body.present .notes, body.present .kbd-hint,
+body.present .filters, body.present .bulk, body.present [data-panel="since"], body.present .item-row > input, body.present .row-actions { display: none !important; }
+body.present main { max-width: 1600px; }
+body.present .d-title { font-size: 26px; }
+body.present .verdict h2 { font-size: 28px; }
+.present-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 50; display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center;
+  padding: 14px 24px; background: var(--surface); border-top: 2px solid var(--accent); box-shadow: 0 -8px 30px rgba(0, 0, 0, .18); }
+.present-steps { display: flex; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.present-steps li { padding: 4px 10px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+.present-steps li.done { color: var(--text-2); }
+.present-steps li.now { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.present-text { display: grid; gap: 2px; }
+.present-text b { font-size: 20px; }
+.present-actions { display: flex; gap: 8px; align-items: center; }
+.demo-row { margin: 12px 0; flex-wrap: wrap; align-items: center; gap: 8px; display: flex; }
+@media (max-width: 900px) { .present-bar { grid-template-columns: 1fr; } }

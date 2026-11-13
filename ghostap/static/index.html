@@ -26,6 +26,9 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.2-2.5 3.8"/><circle cx="12" cy="17.2" r=".6" class="fill"/></svg>
         <span>How it works</span>
       </button>
+      <button class="icon-btn" data-present title="Presentation mode: large, narrated dashboard for a demo" aria-label="Presentation mode">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M12 16v4M8 20h8"/></svg>
+      </button>
       <button class="icon-btn" id="layout-btn" title="Customise the dashboard" aria-label="Customise the dashboard">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="17" height="7" rx="1.5"/></svg>
       </button>
@@ -166,6 +169,11 @@
       <li><b>Look for differences.</b> After that, every access point is compared with what was learned, using eight indicators (below). Each gives a value from 0 to 1 and a reason.</li>
       <li><b>Score and smooth.</b> The indicators are combined into a weighted risk score from 0 to 100, averaged over the last 30 seconds so that one odd frame cannot raise an alarm. <span class="lvl"><i class="lvl-icon MEDIUM"></i>MEDIUM</span> from <span id="help-med">30</span>, <span class="lvl"><i class="lvl-icon HIGH"></i>HIGH</span> from <span id="help-high">60</span>.</li>
     </ol>
+    <div class="row-actions demo-row">
+      <button class="btn primary" data-demo-present title="Replays the synthetic test capture as a new session and narrates it">Run the demo and present it</button>
+      <button class="btn" data-demo>Run the demo</button>
+      <span class="muted">Synthetic test capture: a twin of “MVSR_WiFi” appears after three minutes (about 18 seconds at ×10). Not available during a live capture.</span>
+    </div>
     <h3>Why not just look for duplicate names?</h3>
     <p>Big networks (campus, office) legitimately use many access points with the same name. A name-only check alarms on all of them. The <b>Name-only</b> tab shows how many alarms that simple approach would raise on this capture.</p>
     <h3>The eight indicators, attack signatures and other detectors</h3>
@@ -186,5 +194,6 @@
   <script src="/static/views/sessions.js"></script>
   <script src="/static/views/system.js"></script>
   <script src="/static/views/whatif.js"></script>
+  <script src="/static/present.js"></script>
 </body>
 </html>

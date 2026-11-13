@@ -139,6 +139,6 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F086 | AI alert explainer (opt-in) | I | todo |
 | F087 | Ask GhostAP (opt-in) | I | todo |
 | F088 | Labelling assistant | G | todo |
-| F089 | Demo button | D | todo |
-| F090 | Presentation mode | D | todo |
-| F091 | Dashboard screenshot for the report | D | todo |
+| F089 | Demo button | D | done |
+| F090 | Presentation mode | D | done |
+| F091 | Dashboard screenshot for the report | D | done |

@@ -169,12 +169,12 @@ def create_app(db: str, config: Optional[dict] = None,
     def viewed_session() -> Optional[str]:
         """?session=<id> selects a past session; absent = the current one."""
         sid = request.args.get("session") or None
-        return None if sid in (None, current_session) else sid
+        return None if sid in (None, ctx.current_session) else sid
 
     def db_path() -> str:
         sid = viewed_session()
         if sid is None:
-            return db
+            return ctx.db
         if sessions is None:
             abort(404)
         try:
@@ -191,10 +191,10 @@ def create_app(db: str, config: Optional[dict] = None,
             meta = sessions.get(sid).meta()
             return {"mode": "session", "source": meta.get("name", sid), "state": "done", "frames": None,
                     "message": "", "speed": None, "data_version": 0, "session": sid}
-        st = pipeline.snapshot() if pipeline is not None else {
-            "mode": "database", "source": db, "state": "done", "frames": None,
+        st = ctx.pipeline.snapshot() if ctx.pipeline is not None else {
+            "mode": "database", "source": ctx.db, "state": "done", "frames": None,
             "message": "", "speed": None, "data_version": 0}
-        st["session"] = current_session
+        st["session"] = ctx.current_session
         return st
 
     def actor() -> str:
@@ -208,11 +208,11 @@ def create_app(db: str, config: Optional[dict] = None,
         return body, None
 
     def active_mutes() -> List[dict]:
-        with Store(admin_db or db) as s:
+        with Store(ctx.admin_db) as s:
             return s.active_mutes(time.time())
 
     def audit(action: str, target: Optional[str] = None, detail: Optional[dict] = None) -> None:
-        with Store(admin_db or db) as s:
+        with Store(ctx.admin_db) as s:
             s.audit(actor(), action, target, detail)
 
     ctx = SimpleNamespace(cfg=cfg, db=db, pipeline=pipeline, sessions=sessions, started=started,
@@ -436,7 +436,7 @@ def create_app(db: str, config: Optional[dict] = None,
                 abort(404)
             after = s.alert(alert_id)
         audit("triage", "{} {}".format(after["ssid"], after["bssid"]),
-              {"alert": alert_id, "session": viewed_session() or current_session,
+              {"alert": alert_id, "session": viewed_session() or ctx.current_session,
                "from": before.get("triage_status") or "new", "to": status_,
                "note_changed": (before.get("triage_note") or "") != (note or "")})
         return jsonify(after)
@@ -449,6 +449,8 @@ def create_app(db: str, config: Optional[dict] = None,
     web_ap.register(app, ctx)
     from . import web_tools
     web_tools.register(app, ctx)
+    from . import web_demo
+    web_demo.register(app, ctx)
 
     @app.get("/api/timeline")
     def timeline():
@@ -651,6 +653,9 @@ def main(argv=None) -> int:
         return 1
     finally:
         pipe.stop()
+        current = app.extensions["ghostap"].pipeline     # the demo button may have replaced it
+        if current is not None and current is not pipe:
+            current.stop()
     return 0
 
 
