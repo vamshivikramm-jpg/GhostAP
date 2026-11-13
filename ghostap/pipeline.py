@@ -54,11 +54,16 @@ class IncrementalScorer:
 
     def step(self, final: bool = False) -> dict:
         with Store(self.db) as store:
+            first_round = self.last_id == 0
             new, self.last_id = store.observations_after(self.last_id)
+            if not new and not final:
+                return {"new_frames": 0, "new_rows": 0, "alerts": None}   # idle: nothing to do
+            if first_round:
+                store.clear_profiles()           # profiles are rebuilt from what we read
             self.analyzer.add(new)
             self.duplicates.update(new)
             report = self.engine.run(final=final)
-            store.rebuild_profiles()
+            store.update_profiles(new)
             store.append_timeline(report.timeline)
             store.save_latest(report.latest)
             store.save_alerts("ghostap", report.alerts)
@@ -101,7 +106,10 @@ class Pipeline:
             "last_scored_at": None,
             "score_seconds": None,
             "last_frame_ts": None,
+            "rejected": {},       # damaged frames skipped, by reason
+            "data_version": 0,    # bumped whenever scores / alerts change
         }
+        self._rejected: dict = {}
 
     # -- control ------------------------------------------------------------ #
 
@@ -139,6 +147,9 @@ class Pipeline:
 
     # -- internals ---------------------------------------------------------- #
 
+    def _damaged(self) -> dict:
+        return {k: v for k, v in self._rejected.items() if k != "not_beacon" and v}
+
     def _set(self, **kw) -> None:
         with self._lock:
             self.status.update(kw)
@@ -158,7 +169,7 @@ class Pipeline:
                 for pkt in reader:
                     if self._stop.is_set():
                         break
-                    obs = parse_frame(pkt)
+                    obs = parse_frame(pkt, self._rejected)
                     if not obs:
                         continue
                     if ts0 is None:
@@ -175,9 +186,9 @@ class Pipeline:
                     if time.time() - last_commit > 0.5:
                         store.commit()
                         last_commit = time.time()
-                        self._set(frames=n, last_frame_ts=last_ts)
+                        self._set(frames=n, last_frame_ts=last_ts, rejected=self._damaged())
             store.close()
-            self._set(frames=n, last_frame_ts=last_ts,
+            self._set(frames=n, last_frame_ts=last_ts, rejected=self._damaged(),
                       message="replay finished ({} frames)".format(n))
         except FileNotFoundError:
             self._set(state="error", message="pcap not found: {}".format(self.pcap))
@@ -192,12 +203,13 @@ class Pipeline:
 
         def on_frame(obs):
             counter["n"] += 1
-            self._set(frames=counter["n"], last_frame_ts=obs["ts"])
+            self._set(frames=counter["n"], last_frame_ts=obs["ts"], rejected=self._damaged())
 
         try:
             n = collect_live(self.iface, self.duration, store, hop=self.hop, dwell=self.dwell,
                              save_pcap=self.save_pcap, stop=self._stop, on_frame=on_frame,
-                             on_status=lambda m: self._set(hopping=m))
+                             on_status=lambda m: self._set(hopping=m, rejected=self._damaged()),
+                             stats=self._rejected)
             msg = "live capture finished ({} frames)".format(n)
             if self.save_pcap:
                 msg += "; saved to {}".format(self.save_pcap)
@@ -215,8 +227,11 @@ class Pipeline:
             finished = self._ingest_done.wait(self.rescore_seconds)
             try:
                 t0 = time.time()
-                scorer.step(final=finished)
-                self._set(last_scored_at=time.time(), score_seconds=round(time.time() - t0, 3))
+                out = scorer.step(final=finished)
+                kw = {"last_scored_at": time.time(), "score_seconds": round(time.time() - t0, 3)}
+                if out["new_frames"] or out["new_rows"] or finished:
+                    kw["data_version"] = self.status["data_version"] + 1
+                self._set(**kw)
             except Exception as e:
                 self._set(message="rescoring failed: {}: {}".format(type(e).__name__, e))
             if finished or self._stop.is_set():

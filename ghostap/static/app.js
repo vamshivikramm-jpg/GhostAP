@@ -53,7 +53,7 @@
     colorOf: new Map(), last: {}, scoreField: "score", onlyAlerting: false,
     evFilter: "all", sort: { key: "peak_score", dir: -1 }, search: "",
     aps: [], ghost: [], base: [], networks: [], series: [], events: [],
-    known: null, plotBound: false, apPlotKey: null,
+    known: null, plotBound: false, version: null, offline: false,
   };
 
   // ------------------------------------------------------------------ helpers
@@ -99,10 +99,11 @@
     return i < SLOTS ? css("--s" + (i + 1)) : css("--s-other");
   }
   async function get(url) {
-    const r = await fetch(url, { cache: "no-store" });
-    if (!r.ok) throw new Error(url + " -> " + r.status);
+    const r = await fetch(url, { cache: "no-store", credentials: "same-origin" });
+    if (!r.ok) { const e = new Error(url + " -> " + r.status); e.status = r.status; throw e; }
     return r.json();
   }
+  const ssidLabel = (s) => (s === "<hidden>" ? "Hidden network" : s);
   function changed(name, data) {
     const s = JSON.stringify(data);
     if (state.last[name] === s) return false;
@@ -158,7 +159,15 @@
       `<span class="pill"><i class="dot ${esc(st.state)}"></i>${esc(mode)} · ${esc(st.state || "")}</span>` +
       `<span class="mono">${esc(st.source || "")}</span><span>${esc(clock)}</span>` +
       (st.hopping ? `<span>${esc(st.hopping)}</span>` : "") +
-      (st.save_pcap ? `<span>recording → <span class="mono">${esc(st.save_pcap)}</span></span>` : "");
+      (st.save_pcap ? `<span>recording → <span class="mono">${esc(st.save_pcap)}</span></span>` : "") +
+      damaged(st.rejected);
+  }
+
+  function damaged(rej) {
+    const n = Object.values(rej || {}).reduce((a, b) => a + b, 0);
+    if (!n) return "";
+    const detail = Object.entries(rej).map(([k, v]) => `${v} ${k.replace("_", " ")}`).join(", ");
+    return `<span title="Damaged frames are skipped so they cannot cause false alarms: ${esc(detail)}">skipped ${n} damaged frame${n > 1 ? "s" : ""}</span>`;
   }
 
   function renderVerdict(s) {
@@ -190,9 +199,10 @@
       actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">Inspect</button>`;
     } else {
       cls = "ok"; title = `All clear: ${s.aps} access point${s.aps === 1 ? "" : "s"} on ${s.networks} network${s.networks === 1 ? "" : "s"} look normal`;
-      sub = s.baseline_alerts
-        ? `A name-only check would have raised ${s.baseline_alerts} alarm${s.baseline_alerts === 1 ? "" : "s"} here, because some networks have several access points.`
-        : "No network name is shared between access points.";
+      sub = (s.dismissed_alerts ? `${s.dismissed_alerts} alert${s.dismissed_alerts === 1 ? " was" : "s were"} marked as false positive by an analyst. ` : "") +
+        (s.baseline_alerts
+          ? `A name-only check would have raised ${s.baseline_alerts} alarm${s.baseline_alerts === 1 ? "" : "s"} here, because some networks have several access points.`
+          : "No network name is shared between access points.");
     }
     actions += `<button class="btn" data-help>How it works</button>`;
     v.className = "verdict " + cls;
@@ -238,15 +248,15 @@
         return;
       }
       el.innerHTML = state.ghost.map((a) => `
-        <button class="item ${isSel(a) ? "selected" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
-          ${lvl(a.level)}<span class="who">${esc(a.ssid)}</span><span class="score">${fmt(a.score, 0)}</span>
+        <button class="item ${isSel(a) ? "selected" : ""} ${a.triage_status === "false_positive" ? "dismissed" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
+          ${lvl(a.level)}<span class="who">${esc(ssidLabel(a.ssid))}</span><span class="score">${fmt(a.score, 0)}</span>
           <span class="sub"><span class="mono">${esc(a.bssid)}</span>· first ${rel(a.first_ts)} ${triageTag(a.triage_status)}</span>
         </button>`).join("");
     } else if (state.tab === "networks") {
       el.innerHTML = state.networks.length ? state.networks.map((n) => {
         const hot = n.aps.some((a) => a.alert_id);
         return `<div class="net ${hot ? "hot" : ""}">
-          <div class="net-head"><b>${esc(n.ssid)}</b>
+          <div class="net-head"><b>${esc(ssidLabel(n.ssid))}</b>
             <span class="net-meta">${n.aps.length} AP${n.aps.length > 1 ? "s" : ""} · ${esc(n.securities.join(", "))} · ch ${esc(n.channels.join(", "))}</span></div>
           ${n.aps.map((a) => `
             <button class="net-ap ${isSel(a) ? "selected" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
@@ -302,6 +312,13 @@
   // ------------------------------------------------------------------ detail
   async function loadDetail() {
     if (!state.sel) return;
+    if (state.version !== null && !state.aps.some(isSel)) {
+      // e.g. a shared #ap= link opened before this capture reached that access point
+      delete state.last.detail;
+      $("detail").innerHTML = `<div class="empty big-empty"><p><b>${esc(ssidLabel(state.sel.ssid))}</b> <span class="mono">${esc(state.sel.bssid)}</span></p>
+        <p>This access point has not been heard in this capture yet. It will appear here as soon as it is.</p></div>`;
+      return;
+    }
     let d;
     try {
       d = await get(`/api/ap?ssid=${encodeURIComponent(state.sel.ssid)}&bssid=${encodeURIComponent(state.sel.bssid)}`);
@@ -332,17 +349,16 @@
       </svg>${lvl(level)}</div>`;
   }
 
-  function comparison(ap, sibs) {
-    if (!sibs.length) {
-      return `<p class="muted">This is the only access point using the name “${esc(ap.ssid)}”, so there is nothing to compare it with. GhostAP still checks its security, uptime and behaviour over time.</p>`;
-    }
+  /** Rows of the "this AP vs. the network's known APs" comparison (shared by the
+   *  on-screen table and the exported report). */
+  function compareData(ap, sibs) {
     const known = sibs.filter((x) => x.in_baseline);
     // An AP that was there while GhostAP learned the network is itself part of "normal".
     const ref = ap.in_baseline ? [ap, ...known] : known.length ? known : sibs;
     const cols = [...known, ...sibs.filter((x) => !x.in_baseline)].slice(0, 3);
     const upAt = (x) => (x.uptime_first_seen == null ? null
       : x.first_seen <= ap.first_seen ? x.uptime_first_seen + (ap.first_seen - x.first_seen) : x.uptime_first_seen);
-    const rows = [
+    const defs = [
       ["Vendor (first half of address)", (x) => x.oui, (x) => x.oui],
       ["Channel", (x) => x.channels, (x) => x.channels],
       ["Security", (x) => x.securities, (x) => x.securities],
@@ -356,20 +372,66 @@
       ["Beacon interval", (x) => (x.beacon_interval == null ? "–" : x.beacon_interval + " TU"), (x) => x.beacon_interval],
       ["First seen", (x) => rel(x.first_seen) + (x.in_baseline ? " (while learning)" : ""), null, (me) => !me.in_baseline],
     ];
-    const body = rows.map(([name, show, val, diffFn]) => {
-      let diff;
-      if (diffFn) diff = diffFn(ap, ref);
-      else { const refVals = new Set(ref.map(val)); diff = !refVals.has(val(ap)); }
-      return `<tr><td class="attr">${esc(name)}</td>
-        <td class="me ${diff ? "diff" : "same"}" title="${diff ? "differs from the network's known access points" : "matches the network's known access points"}">${esc(show(ap))}</td>
-        ${cols.map((x) => `<td>${esc(show(x))}</td>`).join("")}</tr>`;
-    }).join("");
-    const more = sibs.length - cols.length;
+    const rows = defs.map(([name, show, val, diffFn]) => {
+      const diff = sibs.length ? (diffFn ? diffFn(ap, ref) : !new Set(ref.map(val)).has(val(ap))) : null;
+      return { name, me: show(ap), diff, others: cols.map(show) };
+    });
+    return { rows, cols, more: sibs.length - cols.length };
+  }
+
+  function comparison(ap, sibs) {
+    if (!sibs.length) {
+      return `<p class="muted">This is the only access point using the name “${esc(ssidLabel(ap.ssid))}”, so there is nothing to compare it with. GhostAP still checks its security, uptime and behaviour over time.</p>`;
+    }
+    const { rows, cols, more } = compareData(ap, sibs);
+    const body = rows.map((r) => `<tr><td class="attr">${esc(r.name)}</td>
+        <td class="me ${r.diff ? "diff" : "same"}" title="${r.diff ? "differs from the network's known access points" : "matches the network's known access points"}">${esc(r.me)}</td>
+        ${r.others.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`).join("");
     return `<div class="table-wrap"><table class="cmp">
       <thead><tr><th></th><th class="me"><span class="colhead">This access point<small class="mono">${esc(ap.bssid)}</small></span></th>
       ${cols.map((x) => `<th><span class="colhead">${x.in_baseline ? "Known AP" : "Other new AP"}<small class="mono">${esc(x.bssid)}</small></span></th>`).join("")}</tr></thead>
       <tbody>${body}</tbody></table></div>
-      <p class="cmp-legend"><b style="color:var(--critical)">≠</b> differs from every access point known for “${esc(ap.ssid)}” · <b style="color:var(--good)">=</b> matches${more > 0 ? ` · ${more} more access point${more > 1 ? "s" : ""} not shown` : ""}</p>`;
+      <p class="cmp-legend"><b style="color:var(--critical)">≠</b> differs from every access point known for “${esc(ssidLabel(ap.ssid))}” · <b style="color:var(--good)">=</b> matches${more > 0 ? ` · ${more} more access point${more > 1 ? "s" : ""} not shown` : ""}</p>`;
+  }
+
+  // ------------------------------------------------------------------ export
+  function exportReport(d) {
+    const md = (v) => String(v == null ? "–" : v).replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|");
+    const ap = d.ap, alert = d.alert, latest = d.latest;
+    const level = alert ? alert.level : latest ? latest.level : "not scored";
+    const score = alert ? alert.score : latest ? latest.score : null;
+    const inds = ((alert && alert.indicators && alert.indicators.length) ? alert.indicators : latest ? latest.indicators : []) || [];
+    const st = (state.summary && state.summary.status) || {};
+    const L = [];
+    L.push(`# GhostAP access point report: ${md(ssidLabel(ap.ssid))} (${md(ap.bssid)})`, "");
+    L.push(`- Generated: ${new Date().toISOString()}`);
+    L.push(`- Source: ${md(st.mode)} ${md(st.source)}`);
+    L.push(`- Verdict: **${md(level)}**, risk ${fmt(score, 1)} / 100${alert ? ` (peak at ${rel(alert.peak_ts)}; first alert ${rel(alert.first_ts)}; HIGH ${rel(alert.high_ts)})` : ""}`);
+    L.push(`- First seen: ${rel(ap.first_seen)}${ap.in_baseline ? " (present while GhostAP learned the network)" : " (appeared after the learning period)"}`);
+    if (alert) L.push(`- Triage: ${md((TRIAGE.find((t) => t[0] === (alert.triage_status || "new")) || ["", "New"])[1])}${alert.triage_note ? ` · note: ${md(alert.triage_note)}` : ""}`);
+    if (d.siblings && d.siblings.length) {
+      const { rows, cols } = compareData(ap, d.siblings);
+      L.push("", "## Compared with the network's known access points", "");
+      L.push(`| Attribute | This AP ${md(ap.bssid)} | ${cols.map((c) => `${c.in_baseline ? "Known AP" : "Other new AP"} ${md(c.bssid)}`).join(" | ")} |`);
+      L.push(`|---|---|${cols.map(() => "---").join("|")}|`);
+      rows.forEach((r) => L.push(`| ${md(r.name)} | ${r.diff ? "≠ " : "= "}${md(r.me)} | ${r.others.map(md).join(" | ")} |`));
+    }
+    L.push("", "## Indicators", "", "| Indicator | Value | Weight | Points | Finding |", "|---|---|---|---|---|");
+    inds.slice().sort((a, b) => b.contribution - a.contribution).forEach((c) =>
+      L.push(`| ${md(label(c.name))} | ${fmt(c.value, 2)} | ${fmt(c.weight)} | ${fmt(c.contribution)} | ${md(c.reason)} |`));
+    if (alert && alert.benign_causes && alert.benign_causes.length) {
+      const ruled = new Set(JSON.parse(store.get("ghostap-ruleout-" + alert.id) || "[]"));
+      L.push("", "## Innocent explanations", "");
+      alert.benign_causes.forEach((b, i) => L.push(`- [${ruled.has(i) ? "x" : " "}] ${md(b)}`));
+    }
+    L.push("", "---", "Generated by GhostAP (passive monitoring of beacon / probe-response frames only).", "");
+    const blob = new Blob([L.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `ghostap-${ssidLabel(ap.ssid).replace(/[^A-Za-z0-9_-]+/g, "_")}-${ap.bssid.replace(/:/g, "")}.md`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   }
 
   function indicatorRows(inds) {
@@ -395,6 +457,7 @@
   }
 
   function renderDetail(d) {
+    state.detail = d;
     const ap = d.ap, alert = d.alert, latest = d.latest;
     const score = alert ? alert.score : latest ? latest.score : null;
     const level = alert ? alert.level : latest ? latest.level : null;
@@ -412,8 +475,8 @@
     let html = `
       <div class="d-head">
         <div>
-          <h2 class="d-title">${esc(ap.ssid)} <span class="mono muted">${esc(ap.bssid)}</span></h2>
-          <div class="d-tags">${tags}</div>
+          <h2 class="d-title">${esc(ssidLabel(ap.ssid))} <span class="mono muted">${esc(ap.bssid)}</span></h2>
+          <div class="d-tags">${tags}<button class="btn small" data-export title="Download a Markdown write-up of this access point (for your report or notes)">Export report</button></div>
           <div class="why ${esc(level || "")}"><b>${esc(whatIs)}</b>
             ${hits.length ? `<span class="muted">${alert ? "At its peak (" + rel(alert.peak_ts) + ") the main reasons were:" : "What raised the score:"}</span><ul>${whyList}</ul>`
               : `<span class="muted">${inds.length ? "None of the eight checks found anything unusual about this access point." : "Scoring starts after the learning period."}</span>`}
@@ -492,6 +555,7 @@
 
   // detail interactions (event delegation; survives re-render)
   $("detail").addEventListener("click", async (e) => {
+    if (e.target.closest("[data-export]") && state.detail) { exportReport(state.detail); return; }
     const tb = e.target.closest("[data-triage]");
     if (tb) {
       tb.parentElement.querySelectorAll(".seg-btn").forEach((b) => { b.classList.toggle("active", b === tb); b.setAttribute("aria-pressed", b === tb); });
@@ -505,8 +569,7 @@
         body: JSON.stringify({ status: active ? active.dataset.triage : "new", note: $("triage-note").value }),
       });
       $("triage-saved").textContent = r.ok ? "Saved " + new Date().toLocaleTimeString() : "Could not save (" + r.status + ")";
-      delete state.last.ghost;
-      refresh(true);
+      refresh(true, true);
     }
   });
   $("detail").addEventListener("change", (e) => {
@@ -677,6 +740,7 @@
       if (!window.matchMedia("(max-width: 900px)").matches) $("detail").scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
     if (e.target.closest("[data-help]")) openHelp();
+    if (e.target.closest("[data-retry]")) refresh(false, true);
   });
 
   // ------------------------------------------------------------------ help, theme, keys
@@ -727,36 +791,57 @@
 
   // ------------------------------------------------------------------ polling
   let timer = null;
-  async function refresh(once) {
+  async function refresh(once, force) {
     try {
-      const [summary, ghost, base, networks, series, events, aps] = await Promise.all([
-        get("/api/summary"), get("/api/alerts?detector=ghostap"), get("/api/alerts?detector=baseline"),
-        get("/api/networks"), get("/api/timeline"), get("/api/events"), get("/api/aps"),
-      ]);
+      const summary = await get("/api/summary");
       state.summary = summary;
       state.t0 = summary.capture_start;
+      state.offline = false;
       renderStatus(summary);
-      if (changed("verdict", [summary.top_alert, summary.alerts, summary.baseline_complete, summary.aps, summary.status.state,
-        summary.status.message, Math.round((summary.capture_end || 0) - (summary.capture_start || 0))])) renderVerdict(summary);
+      if (changed("verdict", [summary.top_alert, summary.alerts, summary.dismissed_alerts, summary.baseline_complete,
+        summary.aps, summary.status.state, summary.status.message,
+        Math.round((summary.capture_end || 0) - (summary.capture_start || 0))])) renderVerdict(summary);
       renderTiles(summary);
-      notify(ghost);
-      state.ghost = ghost; state.base = base; state.networks = networks; state.events = events; state.aps = aps; state.series = series;
-      if (changed("side", [ghost, base, networks, state.tab])) renderSide();
-      if (changed("timeline", [series, events, summary.capture_end])) renderTimeline();
-      if (changed("events", events)) renderEvents();
-      if (changed("aps", aps)) renderTable();
+
+      // The heavy lists only change when the server's data version changes.
+      if (force || summary.data_version !== state.version) {
+        const [ghost, base, networks, series, events, aps] = await Promise.all([
+          get("/api/alerts?detector=ghostap"), get("/api/alerts?detector=baseline"),
+          get("/api/networks"), get("/api/timeline"), get("/api/events"), get("/api/aps"),
+        ]);
+        state.version = summary.data_version;
+        notify(ghost);
+        state.ghost = ghost; state.base = base; state.networks = networks; state.events = events; state.aps = aps; state.series = series;
+        if (changed("side", [ghost, base, networks, state.tab])) renderSide();
+        if (changed("timeline", [series, events, summary.capture_end])) renderTimeline();
+        if (changed("events", events)) renderEvents();
+        if (changed("aps", aps)) renderTable();
+        if (state.sel) loadDetail();
+      }
       if (!state.sel) {
         const m = /^#ap=([^|]*)\|(.+)$/.exec(location.hash);
         if (m) select(decodeURIComponent(m[1]), decodeURIComponent(m[2]), false);
-        else if (ghost.length) select(ghost[0].ssid, ghost[0].bssid, false);
-      } else {
-        loadDetail();
+        else if (state.ghost.length) select(state.ghost[0].ssid, state.ghost[0].bssid, false);
       }
       if (!once) schedule(summary.status && summary.status.state === "running" ? 2000 : 10000);
     } catch (e) {
-      $("status").innerHTML = '<span class="pill"><i class="dot error"></i>dashboard server not reachable</span>';
-      if (!once) schedule(5000);
+      showOffline(e);
+      if (!once) schedule(e.status === 401 ? 30000 : 5000);
     }
+  }
+  function showOffline(e) {
+    state.offline = true;
+    delete state.last.verdict;
+    const auth = e && e.status === 401;
+    $("status").innerHTML = `<span class="pill"><i class="dot error"></i>${auth ? "sign-in needed" : "not connected"}</span>`;
+    $("verdict").className = "verdict error offline";
+    $("verdict-icon").innerHTML = ICONS.error;
+    $("verdict-title").textContent = auth ? "Sign-in needed" : "Lost connection to the GhostAP server";
+    $("verdict-sub").textContent = auth
+      ? "This dashboard is reachable from the network, so it needs its access link. Open the link GhostAP printed in the terminal when it started (it ends in /?token=…)."
+      : "The data below is from the last successful update. Is GhostAP still running? Retrying every 5 seconds.";
+    $("verdict-actions").innerHTML = '<button class="btn" data-retry>Retry now</button>';
+    $("baseline-progress").hidden = true;
   }
   function schedule(ms) { clearTimeout(timer); timer = setTimeout(() => refresh(false), ms); }
   refresh(false);

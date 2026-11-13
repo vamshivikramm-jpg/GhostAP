@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS ap_profiles (
     rssi_min    INTEGER,
     rssi_max    INTEGER,
     rssi_avg    REAL,
+    rssi_n      INTEGER,                      -- frames with an RSSI (for incremental averages)
     PRIMARY KEY (ssid, bssid)
 );
 
@@ -103,10 +104,10 @@ _INSERT = "INSERT INTO observations ({}) VALUES ({})".format(
 _REBUILD = """
 INSERT INTO ap_profiles
     (ssid, bssid, first_seen, last_seen, frames, channels, securities,
-     rssi_min, rssi_max, rssi_avg)
+     rssi_min, rssi_max, rssi_avg, rssi_n)
 SELECT ssid, bssid, MIN(ts), MAX(ts), COUNT(*),
        GROUP_CONCAT(DISTINCT channel), GROUP_CONCAT(DISTINCT security),
-       MIN(rssi), MAX(rssi), AVG(rssi)
+       MIN(rssi), MAX(rssi), AVG(rssi), COUNT(rssi)
 FROM observations
 GROUP BY ssid, bssid
 """
@@ -133,6 +134,9 @@ class Store:
         cols = {r[1] for r in self.conn.execute("PRAGMA table_info(observations)")}
         if "fingerprint" not in cols:
             self.conn.execute("ALTER TABLE observations ADD COLUMN fingerprint TEXT")
+        pcols = {r[1] for r in self.conn.execute("PRAGMA table_info(ap_profiles)")}
+        if "rssi_n" not in pcols:
+            self.conn.execute("ALTER TABLE ap_profiles ADD COLUMN rssi_n INTEGER")
         acols = {r[1] for r in self.conn.execute("PRAGMA table_info(alerts)")}
         for col, decl in (("triage_status", "TEXT DEFAULT 'new'"), ("triage_note", "TEXT"),
                           ("triage_ts", "REAL")):
@@ -155,6 +159,65 @@ class Store:
         with self.conn:
             self.conn.execute("DELETE FROM ap_profiles")
             self.conn.execute(_REBUILD)
+
+    def clear_profiles(self) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM ap_profiles")
+
+    def update_profiles(self, observations: List[dict]) -> int:
+        """Merge new observations into ap_profiles without rescanning old ones.
+
+        Gives the same result as rebuild_profiles() over all observations, at a cost
+        proportional to the new data only (the live dashboard calls this every round).
+        Returns the number of APs touched.
+        """
+        agg: dict = {}
+        for o in observations:
+            a = agg.get((o["ssid"], o["bssid"]))
+            if a is None:
+                a = agg[(o["ssid"], o["bssid"])] = {
+                    "first": o["ts"], "last": o["ts"], "frames": 0, "channels": set(),
+                    "securities": set(), "rmin": None, "rmax": None, "rsum": 0, "rn": 0}
+            a["first"], a["last"] = min(a["first"], o["ts"]), max(a["last"], o["ts"])
+            a["frames"] += 1
+            if o.get("channel") is not None:
+                a["channels"].add(int(o["channel"]))
+            if o.get("security"):
+                a["securities"].add(o["security"])
+            r = o.get("rssi")
+            if r is not None:
+                a["rmin"] = r if a["rmin"] is None else min(a["rmin"], r)
+                a["rmax"] = r if a["rmax"] is None else max(a["rmax"], r)
+                a["rsum"] += r
+                a["rn"] += 1
+        if not agg:
+            return 0
+        self.commit()
+        with self.conn:
+            for (ssid, bssid), a in agg.items():
+                old = self.conn.execute(
+                    "SELECT * FROM ap_profiles WHERE ssid = ? AND bssid = ?", (ssid, bssid)).fetchone()
+                chans, secs = set(a["channels"]), set(a["securities"])
+                first, last, frames = a["first"], a["last"], a["frames"]
+                rmin, rmax, rsum, rn = a["rmin"], a["rmax"], a["rsum"], a["rn"]
+                if old is not None:
+                    chans |= {int(c) for c in (old["channels"] or "").split(",") if c}
+                    secs |= {x for x in (old["securities"] or "").split(",") if x}
+                    first, last = min(first, old["first_seen"]), max(last, old["last_seen"])
+                    frames += old["frames"] or 0
+                    old_n = old["rssi_n"] if old["rssi_n"] is not None else (old["frames"] or 0)
+                    if old["rssi_avg"] is not None and old_n:
+                        rsum += old["rssi_avg"] * old_n
+                        rn += old_n
+                        rmin = old["rssi_min"] if rmin is None else min(rmin, old["rssi_min"])
+                        rmax = old["rssi_max"] if rmax is None else max(rmax, old["rssi_max"])
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO ap_profiles (ssid, bssid, first_seen, last_seen, frames, "
+                    "channels, securities, rssi_min, rssi_max, rssi_avg, rssi_n) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (ssid, bssid, first, last, frames, ",".join(str(c) for c in sorted(chans)) or None,
+                     ",".join(sorted(secs)) or None, rmin, rmax, (rsum / rn) if rn else None, rn))
+        return len(agg)
 
     def reset(self) -> None:
         with self.conn:

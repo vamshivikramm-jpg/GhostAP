@@ -261,7 +261,9 @@ class RiskEngine:
             a["high_ts"] = t
         if _LEVEL_ORDER[level] > _LEVEL_ORDER[a["level"]]:
             a["level"] = level
-        if score >= a["score"] and contrib:
+        # first time the peak is reached (ties keep the earlier time); fill the breakdown
+        # if the alert started in a window where the AP was silent
+        if contrib and (score > a["score"] or not a["indicators"]):
             a["score"], a["peak_ts"], a["indicators"] = score, t, contrib
         a["last_ts"] = t
         a["reasons"], a["benign_causes"] = _summarise(a["indicators"])

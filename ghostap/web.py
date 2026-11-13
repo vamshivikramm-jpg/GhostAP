@@ -10,23 +10,64 @@
     sudo .venv/bin/python -m ghostap.web --iface wlan0 --db data/live.db
 
 Then open http://127.0.0.1:8050
+
+Security model
+  * Bound to localhost (default): only requests addressed to localhost / 127.0.0.1 are
+    served, which blocks DNS-rebinding attacks from web pages you visit.
+  * Bound to anything else (--host 0.0.0.0, e.g. Kali in a VM): an access token is
+    required. One is generated at start-up and printed as a ready-to-open link; it is
+    exchanged for an HttpOnly, SameSite=Strict cookie. Set your own with GHOSTAP_TOKEN.
+  * Every response carries a strict Content-Security-Policy and anti-framing headers.
 """
 from __future__ import annotations
 
 import argparse
+import hmac
+import ipaddress
 import os
+import secrets
 import sys
 import time
 from collections import defaultdict
 from typing import List, Optional
 
-from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory
 
 from .pipeline import Pipeline
 from .risk import load_config
 from .storage import Store
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1"}
+TOKEN_COOKIE = "ghostap_token"  # noqa: S105 - the cookie's name, not a secret
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+       "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
+       "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+LOGIN_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>GhostAP: sign in</title>
+<body style="font:15px/1.5 system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 16px;color:#222">
+<h1 style="font-size:20px">GhostAP dashboard</h1>
+<p>This dashboard is reachable from the network, so it needs its access link.</p>
+<p>Open the link that GhostAP printed in the terminal when it started; it ends in
+<code>/?token=...</code>.</p></body></html>"""
+
+
+def is_loopback(host: str) -> bool:
+    host = host.strip("[]").lower()
+    if host in LOOPBACK_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _request_hostname() -> str:
+    """Host header without the port (handles [IPv6]:port)."""
+    host = (request.host or "").lower()
+    if host.startswith("["):
+        return host[1:host.find("]")] if "]" in host else host
+    return host.rsplit(":", 1)[0]
 
 
 def _plotly_js() -> Optional[str]:
@@ -40,10 +81,53 @@ def _plotly_js() -> Optional[str]:
 
 
 def create_app(db: str, config: Optional[dict] = None,
-               pipeline: Optional[Pipeline] = None) -> Flask:
+               pipeline: Optional[Pipeline] = None, token: Optional[str] = None,
+               local_only: bool = True) -> Flask:
+    """Build the Flask app.
+
+    local_only: refuse requests whose Host header is not a loopback name/address
+                (DNS-rebinding protection). Use with the default 127.0.0.1 binding.
+    token:      if set, every request needs it (cookie, `Authorization: Bearer`, or a
+                one-time `/?token=` link that sets the cookie).
+    """
     cfg = config or load_config(None)
     app = Flask(__name__, static_folder=None)
     app.config["JSON_SORT_KEYS"] = False
+    app.config["MAX_CONTENT_LENGTH"] = 64 * 1024          # only small JSON bodies are accepted
+
+    def token_ok(value: Optional[str]) -> bool:
+        return bool(value) and hmac.compare_digest(value.encode(), token.encode())
+
+    @app.before_request
+    def guard():
+        if local_only and not is_loopback(_request_hostname()):
+            return Response("GhostAP only answers requests addressed to localhost.\n",
+                            status=403, mimetype="text/plain")
+        if token:
+            if request.path == "/" and token_ok(request.args.get("token")):
+                resp = redirect("/", code=303)                 # drop the token from the URL bar
+                resp.set_cookie(TOKEN_COOKIE, token, httponly=True, samesite="Strict",
+                                max_age=12 * 3600, secure=request.is_secure)
+                return resp
+            auth = request.headers.get("Authorization", "")
+            supplied = auth[7:] if auth.startswith("Bearer ") else request.cookies.get(TOKEN_COOKIE)
+            if not token_ok(supplied):
+                if request.path.startswith("/api/"):
+                    return jsonify({"error": "authentication required"}), 401
+                return Response(LOGIN_PAGE, status=401, mimetype="text/html")
+        return None
+
+    @app.after_request
+    def security_headers(resp):
+        resp.headers["Content-Security-Policy"] = CSP
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        resp.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if request.path.startswith("/api/"):
+            resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     def store() -> Store:
         return Store(db)
@@ -52,7 +136,7 @@ def create_app(db: str, config: Optional[dict] = None,
         if pipeline is not None:
             return pipeline.snapshot()
         return {"mode": "database", "source": db, "state": "done", "frames": None,
-                "message": "", "speed": None}
+                "message": "", "speed": None, "data_version": 0}
 
     # -- pages -------------------------------------------------------------- #
 
@@ -76,32 +160,42 @@ def create_app(db: str, config: Optional[dict] = None,
 
     @app.get("/api/summary")
     def summary():
+        """Small and cheap: the dashboard polls it every 2 s. Counts come from ap_profiles
+        (maintained incrementally), not from scanning every observation."""
         with store() as s:
             row = s.conn.execute(
-                "SELECT COUNT(*) AS n, MIN(ts) AS t0, MAX(ts) AS t1 FROM observations").fetchone()
-            n_aps = s.conn.execute(
-                "SELECT COUNT(*) FROM (SELECT DISTINCT ssid, bssid FROM observations)").fetchone()[0]
-            levels = dict(s.conn.execute(
-                "SELECT level, COUNT(*) FROM alerts WHERE detector='ghostap' GROUP BY level").fetchall())
+                "SELECT COUNT(*) AS aps, COUNT(DISTINCT ssid) AS ssids, COALESCE(SUM(frames), 0) AS n, "
+                "MIN(first_seen) AS t0, MAX(last_seen) AS t1 FROM ap_profiles").fetchone()
+            open_levels = dict(s.conn.execute(
+                "SELECT level, COUNT(*) FROM alerts WHERE detector='ghostap' "
+                "AND COALESCE(triage_status, 'new') != 'false_positive' GROUP BY level").fetchall())
+            dismissed = s.conn.execute(
+                "SELECT COUNT(*) FROM alerts WHERE detector='ghostap' AND triage_status='false_positive'"
+            ).fetchone()[0]
             n_base = s.conn.execute(
                 "SELECT COUNT(*) FROM alerts WHERE detector='baseline'").fetchone()[0]
-            n_ssids = s.conn.execute(
-                "SELECT COUNT(DISTINCT ssid) FROM observations").fetchone()[0]
-            top = s.alerts("ghostap")[:1]
+            triage_v = s.conn.execute(
+                "SELECT COALESCE(MAX(triage_ts), 0), COUNT(*) FROM alerts").fetchone()
+            top = [a for a in s.alerts("ghostap") if a.get("triage_status") != "false_positive"][:1]
+        st = status()
         t0 = row["t0"]
         baseline_s = cfg["baseline_minutes"] * 60
         return jsonify({
-            "status": status(),
+            "status": st,
+            # changes whenever scores, alerts or triage change: the page refetches only then
+            "data_version": "{}-{}-{}-{}".format(st.get("data_version", 0), triage_v[0], triage_v[1],
+                                                 row["aps"]),
             "frames": row["n"],
-            "aps": n_aps,
+            "aps": row["aps"],
+            "networks": row["ssids"],
             "capture_start": t0,
             "capture_end": row["t1"],
             "baseline_seconds": baseline_s,
             "baseline_end": (t0 + baseline_s) if t0 is not None else None,
             "baseline_complete": t0 is not None and row["t1"] >= t0 + baseline_s,
-            "alerts": {"HIGH": levels.get("HIGH", 0), "MEDIUM": levels.get("MEDIUM", 0)},
+            "alerts": {"HIGH": open_levels.get("HIGH", 0), "MEDIUM": open_levels.get("MEDIUM", 0)},
+            "dismissed_alerts": dismissed,
             "baseline_alerts": n_base,
-            "networks": n_ssids,
             "top_alert": ({k: top[0][k] for k in ("id", "ssid", "bssid", "level", "score",
                                                   "first_ts", "reasons", "triage_status")}
                           if top else None),
@@ -301,7 +395,9 @@ def main(argv=None) -> int:
                     help="live: also save captured beacons / probe responses to a pcap")
     ap.add_argument("--keep", action="store_true",
                     help="keep existing data in --db instead of starting fresh (replay/live)")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="address to listen on (default 127.0.0.1). Anything else, e.g. 0.0.0.0 "
+                         "to reach Kali in a VM from the host, turns on token login")
     ap.add_argument("--port", type=int, default=8050)
     args = ap.parse_args(argv)
 
@@ -323,15 +419,43 @@ def main(argv=None) -> int:
     pipe = Pipeline(db, cfg, pcap=args.pcap, iface=args.iface, speed=args.speed,
                     duration=args.duration, reset=not args.keep, hop=hop, dwell=args.dwell,
                     save_pcap=args.save_pcap).start()
-    app = create_app(db, cfg, pipe)
+    local = is_loopback(args.host)
+    token = None if local else (os.environ.get("GHOSTAP_TOKEN") or secrets.token_urlsafe(24))
+    app = create_app(db, cfg, pipe, token=token, local_only=local)
     mode = pipe.status["mode"]
-    print("[+] GhostAP dashboard ({}: {}) -> http://{}:{}".format(
-        mode, pipe.status["source"], args.host, args.port))
+    if local:
+        print("[+] GhostAP dashboard ({}: {}) -> http://{}:{}".format(
+            mode, pipe.status["source"], "127.0.0.1" if args.host in ("localhost", "::1") else args.host,
+            args.port))
+    else:
+        wildcard = args.host in ("0.0.0.0", "::")  # noqa: S104 - checking, not binding
+        shown = "<this-machine-ip>" if wildcard else args.host
+        print("[+] GhostAP dashboard ({}: {}) is reachable from the network.".format(
+            mode, pipe.status["source"]))
+        print("[+] Open this link (keep it private, it is the login):")
+        print("      http://{}:{}/?token={}".format(shown, args.port, token))
+        print("[i] Anyone with the link can see the dashboard. Use it only on a private or lab network.")
     try:
-        app.run(host=args.host, port=args.port, debug=False, threaded=True, use_reloader=False)
+        serve(app, args.host, args.port)
+    except OSError as e:
+        print("[!] could not listen on {}:{}: {} (port in use? try --port 8051)".format(
+            args.host, args.port, e), file=sys.stderr)
+        return 1
     finally:
         pipe.stop()
     return 0
+
+
+def serve(app: Flask, host: str, port: int) -> None:
+    """Production WSGI server (waitress) when installed, else Flask's built-in server."""
+    try:
+        from waitress import serve as waitress_serve
+    except ImportError:
+        print("[i] waitress not installed; using Flask's development server "
+              "(pip install -r requirements.txt)")
+        app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
+        return
+    waitress_serve(app, host=host, port=port, threads=8, ident="GhostAP")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
-scapy
-pandas
-numpy
-flask
-plotly
-pytest
-pyyaml
-matplotlib
+# Runtime
+scapy>=2.5,<3          # 802.11 parsing and live capture
+flask>=3.0,<4          # dashboard API
+waitress>=3.0,<4       # production WSGI server for the dashboard
+plotly>=5.18,<8        # ships plotly.min.js, served locally (no CDN)
+pyyaml>=6.0,<7         # config.yaml
+matplotlib>=3.7,<4     # evaluation charts (results/*.png)
+
+# Development
+pytest>=7.4

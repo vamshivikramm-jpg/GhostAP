@@ -116,7 +116,7 @@ def run_capture(name: str, pcap: str, labels_path: str, cfg: dict,
             "label": lab["label"],
             "attack_start": lab["attack_start"],
             "capture_start": capture_start,
-            "first_seen": an._by_ap[(ssid, bssid)][0]["ts"],
+            "first_seen": an.first_seen(ssid, bssid),
             "ghostap_peak": max((r["score"] for r in tl), default=0.0),
             "ghostap_series": [(r["ts"], r["score"]) for r in tl],
             "baseline_first": base_first.get((ssid, bssid)),
@@ -390,7 +390,8 @@ def make_charts(out: str, metrics: List[dict], sweep: List[dict], scen: List[dic
         ax.set_title(name, fontsize=9, color=INK, loc="left")
         ax.set_ylim(0, 100)
         ax.set_xlim(120, max(r["capture_start"] for r in sub) - t0 + 300)
-    fig.text(0.01, 0.005, "Smoothed GhostAP risk after the 2-min baseline. Top row: captures with an evil twin; "
+    fig.text(0.01, 0.005,
+             "Smoothed GhostAP risk after the 2-min baseline. Top row: captures with an evil twin; "
              "bottom row: benign captures. Blue = evil twin, grey = legit APs, dotted = attack start, "
              "dashed = MEDIUM / HIGH thresholds. x: capture time (s).", fontsize=8.5, color=INK2)
     fig.tight_layout(rect=(0, 0.03, 1, 1))
@@ -490,7 +491,7 @@ def main(argv=None) -> int:
     if len(args.pcap) != len(args.labels):
         ap.error("give one --labels for every --pcap")
     pairs = find_dataset(args.dataset) if os.path.isdir(args.dataset) else []
-    pairs += [(os.path.splitext(os.path.basename(p))[0], p, l) for p, l in zip(args.pcap, args.labels)]
+    pairs += [(os.path.splitext(os.path.basename(p))[0], p, lab) for p, lab in zip(args.pcap, args.labels)]
     if not pairs:
         print("[!] no labelled captures found. Generate the synthetic set with:\n"
               "      python tools/make_eval_set.py\n    or pass --pcap X --labels Y.",

@@ -162,4 +162,5 @@ def test_triage_roundtrip_and_validation(client):
 
 def test_static_files_revalidate(client):
     r = client.get("/static/app.js")
-    assert "no-cache" in r.headers.get("Cache-Control", "") or "max-age=0" in r.headers.get("Cache-Control", "")
+    cc = r.headers.get("Cache-Control", "")
+    assert "no-cache" in cc or "max-age=0" in cc

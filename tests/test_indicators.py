@@ -10,10 +10,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import make_test_pcap  # noqa: E402
 
 from ghostap.collector import collect_pcap  # noqa: E402
-from ghostap.indicators import (  # noqa: E402
-    INDICATOR_NAMES, Analyzer, beacon_interval_mismatch, bssid_conflict,
-    channel_deviation, tsf_anomaly,
-)
+from ghostap.indicators import INDICATOR_NAMES, Analyzer  # noqa: E402
 from ghostap.storage import Store  # noqa: E402
 
 DATA = os.path.join(ROOT, "data")

@@ -83,7 +83,7 @@ def eval_dir(tmp_path_factory):
 def test_dataset_discovery(eval_dir):
     pairs = find_dataset(eval_dir)
     assert len(pairs) == len(make_eval_set.SCENARIOS)
-    assert all(p.endswith(".pcap") and l.endswith(".labels.json") for _, p, l in pairs)
+    assert all(p.endswith(".pcap") and lab.endswith(".labels.json") for _, p, lab in pairs)
 
 
 def test_ghostap_beats_baseline_on_precision_and_fpr(eval_dir):

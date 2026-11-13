@@ -381,7 +381,8 @@ def ie_fingerprint(ap: APStats, base: Optional[SSIDBaseline], siblings) -> Indic
                        "configuration change, or a second device using this BSSID".format(len(fps - known)))
     if fps & base.fingerprints:
         return IndicatorResult(
-            name, 0, "beacon structure matches existing AP(s) of '{}' (same model / software)".format(ap.ssid))
+            name, 0,
+            "beacon structure matches existing AP(s) of '{}' (same model / software)".format(ap.ssid))
     return IndicatorResult(
         name, 1.0, "beacon structure {} matches none of the {} fingerprint(s) seen for '{}' in the "
                    "baseline (different hardware or AP software)".format(
