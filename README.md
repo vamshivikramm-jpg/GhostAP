@@ -174,11 +174,30 @@ During a replay or live capture, a background thread re-runs the risk engine eve
 `/api/ap?ssid=…&bssid=…`, `POST /api/alerts/<id>/triage` (JSON only),
 `/api/alerts?detector=ghostap|baseline|all`, `/api/alerts/<id>`, `/api/timeline`,
 `/api/events`. Plotly is served from the installed `plotly` package, so the dashboard
-works offline. SSIDs come from the air and can be chosen by an attacker, so the front
-end escapes every value it displays.
+works offline. The page polls a small summary every 2 s and refetches the heavy lists
+only when the server's data version changes. The **Export report** button on any AP
+downloads a Markdown write-up (facts, comparison, indicators, triage) for notes or the
+report.
 
-Each rescore re-analyses the whole database. That is fine for lab captures of a few
-minutes, but would need incremental scoring for captures running for hours.
+**Security model.**
+- **Inputs from the air are untrusted:** SSIDs, reasons and analyst notes are
+  HTML-escaped everywhere they are displayed.
+- **Strict headers:** a Content Security Policy (`script-src 'self'`), plus
+  anti-framing and nosniff headers.
+- **Default (127.0.0.1):** only requests addressed to localhost are answered, which
+  blocks DNS-rebinding attacks from websites you visit.
+- **`--host 0.0.0.0`:** token login is required. The link is printed at start-up, or
+  set your own with `GHOSTAP_TOKEN`.
+- **Triage endpoint:** accepts small JSON bodies only.
+- **Server:** the dashboard runs on `waitress`, a production WSGI server.
+
+**Damaged frames.** Frames the driver flags with a bad checksum, frames truncated by
+the capture, and malformed frames are skipped and counted rather than guessed at. A
+corrupted beacon can otherwise invent networks or make a WPA2 AP look open. The status
+bar shows how many were skipped.
+
+Scoring is incremental: each round reads only new frames and updates AP profiles in
+place. An idle round, when nothing new arrived, does no work at all.
 
 ## Evaluation (Phase 6)
 

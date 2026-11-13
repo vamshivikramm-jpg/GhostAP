@@ -78,7 +78,7 @@ Check everything installed correctly. This needs no adapter:
 pytest -q
 ```
 
-All tests should pass (68 at the time of writing).
+All tests should pass (82 at the time of writing).
 
 ## 3. Quick check without any hardware
 
@@ -179,8 +179,13 @@ Then open <http://127.0.0.1:8050> in Firefox on the Kali machine.
 sudo .venv/bin/python -m ghostap.web --iface wlan1 --hop 1,6,11 --host 0.0.0.0
 ```
 
-Then browse to `http://<kali-ip>:8050`; `ip -4 addr` shows the IP. The dashboard has no
-login, so do this only on a private or lab network.
+Because the dashboard is now reachable from the network, GhostAP switches on **token
+login**. It prints a private link like `http://<this-machine-ip>:8050/?token=…`. Replace
+the placeholder with Kali's IP (`ip -4 addr` shows it) and open the link on the host.
+Opening it sets a login cookie and removes the token from the address bar. Without the
+link you only get a "sign-in needed" page. To set your own token instead of a random one:
+`sudo GHOSTAP_TOKEN=some-long-secret .venv/bin/python -m ghostap.web …`. Keep the link
+private, and use this only on a private or lab network.
 
 **Without the dashboard** (collector only, prints a table at the end):
 
@@ -290,6 +295,8 @@ This returns the adapter to normal (managed) mode and restarts NetworkManager.
 | `ModuleNotFoundError: scapy` with sudo | You used `sudo python`. Use `sudo .venv/bin/python` |
 | `kali_monitor.sh` says monitor mode is not supported | That adapter / driver can't do it (common with built-in cards and TL-WN722N v2/v3). Use one from the table in section 0 |
 | Monitor mode set, but 0 frames | NetworkManager switched it back: re-run `start`. Also check `iw dev wlan1 info` shows `type monitor`, and that you're near an AP on the channels you hop |
+| Status bar says *skipped N damaged frames* | Normal on a real radio. Frames that fail their checksum, are truncated or malformed are dropped, so they can't create fake networks or false alarms. A very high number means a weak signal or a busy channel: move closer or check the antenna |
+| Browser shows *GhostAP only answers requests addressed to localhost* | You opened it via a hostname or IP while GhostAP listens on 127.0.0.1. Use `http://127.0.0.1:8050`, or start it with `--host 0.0.0.0` (token login) |
 | Frames arrive, but your network never appears | It is on a channel you aren't hopping (5 GHz?). Use `--hop all` and `sudo iw reg set <country>` |
 | `Device or resource busy` | Another process is using the adapter: `sudo airmon-ng check kill` |
 | Status bar: *hopping stopped: needs the 'iw' tool* | `sudo apt install -y iw` |

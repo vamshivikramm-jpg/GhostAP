@@ -290,13 +290,24 @@ A background pipeline either replays a pcap paced by its original timestamps (e.
   responses, so a live session can later be labelled with `tools/label_capture.py` and
   evaluated (Phase 2).
 
-Two implementation details matter for security and robustness:
+Several implementation details matter for security and robustness:
 
 - **XSS protection:** SSIDs are attacker-controlled input, so every value is HTML-escaped
   before display, including chart legends. An SSID such as `<script>…` cannot run code
   on the analyst's screen.
 - **Offline use:** Plotly is served from the installed Python package, so the dashboard
   works without internet access.
+- **Network exposure:** by default the server answers only requests addressed to
+  localhost, which blocks DNS-rebinding attacks from other websites. When it listens on
+  the network (e.g. Kali in a VM), it requires a randomly generated access token. Every
+  response carries a strict Content Security Policy and anti-framing headers.
+- **Damaged frames:** real radio captures contain frames that fail their checksum or are
+  cut short. GhostAP skips them, and counts them, instead of guessing. A corrupted beacon
+  could otherwise invent a network or lose its security element and look open, which
+  would be a false security-downgrade signal.
+- **Efficient polling:** the page refetches the heavy data only when the server reports
+  a change, and AP profiles are updated incrementally, so long live sessions stay
+  responsive.
 
 > _[Figure placeholder: screenshot of the dashboard during a replay, saved as
 > `docs/figures/dashboard.png`. Run `python tools/demo.py`, wait for the HIGH alert, then
@@ -327,8 +338,9 @@ the previous round.
 
 ### 4.9 Testing
 
-The project has 62 automated tests (`pytest`), which GitHub Actions also runs on every
-push (Python 3.10 and 3.12). They cover:
+The project has 82 automated tests (`pytest`). GitHub Actions runs them on every push
+(Python 3.10 and 3.12), together with a linter that includes security rules (ruff) and a
+dependency vulnerability scan (pip-audit). The tests cover:
 
 - parsing of crafted WPA2, open, hidden-SSID and data frames;
 - the collector end to end;
@@ -341,7 +353,10 @@ push (Python 3.10 and 3.12). They cover:
 - beacon fingerprints;
 - channel hopping and live pcap recording (with a simulated adapter);
 - incremental scoring matching a one-shot run;
-- the allow-list, database migration, and the labelling tool.
+- the allow-list, database migration, and the labelling tool;
+- rejection of corrupted, truncated and malformed frames;
+- the dashboard's security controls (DNS-rebinding check, token login, security headers,
+  request size limit).
 
 ---
 
@@ -566,7 +581,7 @@ well; closing it needs evidence an attacker cannot simply copy, such as timing.
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pytest -q                                   # 62 tests
+pytest -q                                   # 82 tests
 python tools/make_eval_set.py               # labelled synthetic scenarios
 python evaluate.py --dataset data/eval      # tables + charts in results/
 python tools/demo.py                        # guided end-to-end demo + dashboard
@@ -578,7 +593,7 @@ python tools/demo.py                        # guided end-to-end demo + dashboard
 ghostap/   parser, storage, collector, hopper, indicators, risk, pipeline, web, evaluate, static/
 tools/     make_test_pcap.py, make_eval_set.py, label_capture.py, demo.py,
            make_architecture_figure.py
-tests/     62 pytest tests
+tests/     82 pytest tests
 .github/   GitHub Actions workflow (tests on every push)
 docs/      REPORT.md, DEMO.md, figures/
 config.yaml, evaluate.py, requirements.txt, README.md

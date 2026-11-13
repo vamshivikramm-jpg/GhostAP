@@ -47,7 +47,9 @@ ghostap/evaluate.py     metrics, threshold sweep, charts (also ./evaluate.py)
 tools/                  make_test_pcap.py, make_eval_set.py (11 scenarios), label_capture.py,
                         demo.py, kali_monitor.sh, make_architecture_figure.py
 config.yaml             weights, thresholds, timing, known_bssids allow-list
-tests/                  pytest (68 tests); CI: .github/workflows/tests.yml (Py 3.10 + 3.12)
+tests/                  pytest (82 tests); CI: .github/workflows/tests.yml (Py 3.10 + 3.12:
+                        ruff lint incl. security rules, pip-audit, tests, evaluation smoke test)
+pyproject.toml          ruff + pytest config (lint: `ruff check .`)
 ```
 
 ## Commands
@@ -84,6 +86,16 @@ python evaluate.py --dataset data/lab --out results/lab [--unlabelled ignore]
   through `esc()` in app.js, including Plotly legend names. The triage endpoint accepts
   JSON only (this blocks cross-site form posts). Keep both.
 - Static files are served with `max_age=0`. Keep it, or users see stale dashboards.
+- Web security (keep): Host-header check when bound to localhost (DNS rebinding), token
+  login when bound elsewhere, strict CSP (no inline scripts: keep all JS in app.js),
+  64 KB request limit, waitress server. See the docstring at the top of ghostap/web.py.
+- `parse_frame()` rejects bad-FCS, truncated (caplen < wirelen) and malformed frames
+  and counts them by reason. Never "repair" a damaged frame: it creates fake networks or
+  makes WPA2 look open.
+- AP profiles are maintained incrementally (`Store.update_profiles`); a test checks they
+  equal a full `rebuild_profiles()`. The summary endpoint reads counts from ap_profiles.
+- The dashboard refetches its heavy lists only when `/api/summary`'s `data_version`
+  changes. Bump the pipeline's data_version if you add new state that the page shows.
 - Schema changes need a migration in `Store._migrate()` plus a test with an old-schema DB.
 - `RiskEngine` is incremental. A test checks that incremental scoring equals a one-shot
   run (`tests/test_live_and_incremental.py`). Keep it passing.
