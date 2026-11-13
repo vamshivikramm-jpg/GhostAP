@@ -110,15 +110,47 @@ class SSIDBaseline:
     fingerprints: Set[str] = field(default_factory=set)              # beacon structures seen
     bssid_fingerprints: Dict[str, Set[str]] = field(default_factory=dict)
     allowlist: Set[str] = field(default_factory=set)                 # admin-approved BSSIDs
+    saved: bool = False                     # loaded from a saved baseline (F014), not learned
+
+    def to_dict(self) -> dict:
+        """JSON-friendly form for data/monitored.json."""
+        return {
+            "bssids": sorted(self.bssids), "ouis": sorted(self.ouis),
+            "channels": sorted(self.channels),
+            "bssid_channels": {b: sorted(c) for b, c in sorted(self.bssid_channels.items())},
+            "bssid_rssi": {b: [round(m, 2), round(s, 2)] for b, (m, s) in sorted(self.bssid_rssi.items())},
+            "security": self.security, "rssi_ref": self.rssi_ref,
+            "beacon_interval": self.beacon_interval,
+            "fingerprints": sorted(self.fingerprints),
+            "bssid_fingerprints": {b: sorted(f) for b, f in sorted(self.bssid_fingerprints.items())},
+        }
+
+    @classmethod
+    def from_dict(cls, ssid: str, d: dict, allowlist: Iterable[str] = ()) -> "SSIDBaseline":
+        return cls(
+            ssid=ssid,
+            bssids={b.lower() for b in d.get("bssids", [])},
+            ouis=set(d.get("ouis", [])),
+            channels={int(c) for c in d.get("channels", [])},
+            bssid_channels={b.lower(): {int(c) for c in cs} for b, cs in d.get("bssid_channels", {}).items()},
+            bssid_rssi={b.lower(): (float(v[0]), float(v[1])) for b, v in d.get("bssid_rssi", {}).items()},
+            security=d.get("security"), rssi_ref=d.get("rssi_ref"),
+            beacon_interval=d.get("beacon_interval"),
+            fingerprints=set(d.get("fingerprints", [])),
+            bssid_fingerprints={b.lower(): set(f) for b, f in d.get("bssid_fingerprints", {}).items()},
+            allowlist={b.lower() for b in allowlist}, saved=True)
 
 
 class Baseline:
     """Per-SSID baseline learned from the first `minutes` of the capture."""
 
     def __init__(self, observations: Sequence[dict], minutes: float = DEFAULT_BASELINE_MINUTES,
-                 allowlist: Iterable[str] = ()):
+                 allowlist: Iterable[str] = (), saved: Optional[Dict[str, SSIDBaseline]] = None):
+        """`saved`: networks from a saved baseline (F014). They replace whatever would be
+        learned for those SSIDs; every other SSID is still learned from the first minutes."""
         self.minutes = minutes
         self.allowlist = {b.lower() for b in allowlist}
+        self.saved = dict(saved or {})
         self.start = observations[0]["ts"] if observations else 0.0
         self.end = self.start + minutes * 60
         self.ssids: Dict[str, SSIDBaseline] = {}
@@ -151,6 +183,10 @@ class Baseline:
             if b.bssid_rssi:
                 b.rssi_ref = max(m for m, _ in b.bssid_rssi.values())
             b.beacon_interval = bis.most_common(1)[0][0] if bis else None
+            self.ssids[ssid] = b
+
+        for ssid, b in self.saved.items():
+            b.allowlist = self.allowlist
             self.ssids[ssid] = b
 
     def get(self, ssid: str) -> Optional[SSIDBaseline]:
@@ -418,9 +454,13 @@ class Analyzer:
 
     def __init__(self, observations: Sequence[dict] = (),
                  baseline_minutes: float = DEFAULT_BASELINE_MINUTES,
-                 allowlist: Iterable[str] = ()):
+                 allowlist: Iterable[str] = (),
+                 monitored: Optional[Dict[str, SSIDBaseline]] = None):
+        """monitored: saved baselines (F014). With them, scoring starts at the first frame
+        instead of after the learning period, and a twin already on the air is caught."""
         self.baseline_minutes = baseline_minutes
         self.allowlist = {b.lower() for b in allowlist}
+        self.monitored = dict(monitored or {})
         self._reset_state()
         self.add(observations)
 
@@ -431,7 +471,7 @@ class Analyzer:
         self._resets: Dict[Tuple[str, str], List[float]] = defaultdict(list)
         self._last_tsf: Dict[Tuple[str, str], int] = {}
         self._by_ssid: Dict[str, Set[str]] = defaultdict(set)
-        self.baseline = Baseline([], self.baseline_minutes, self.allowlist)
+        self.baseline = Baseline([], self.baseline_minutes, self.allowlist, self.monitored)
         self._baseline_frozen = False
 
     @classmethod
@@ -463,9 +503,32 @@ class Analyzer:
                     self._resets[key].append(o["ts"])
                 self._last_tsf[key] = tsf
         if not self._baseline_frozen:
-            self.baseline = Baseline(self.obs, self.baseline_minutes, self.allowlist)
+            self.baseline = Baseline(self.obs, self.baseline_minutes, self.allowlist, self.monitored)
             # all frames of the baseline window are in once we are past its end
             self._baseline_frozen = self.obs[-1]["ts"] >= self.baseline.end
+
+    @property
+    def scoring_start(self) -> float:
+        """When risk scoring may begin: immediately with a saved baseline, otherwise
+        after the learning period."""
+        return self.baseline.start if self.monitored else self.baseline.end
+
+    def prune(self, before_ts: float) -> int:
+        """F070: forget frames older than `before_ts` (keeping each AP's first HEAD frames
+        and every TSF reset, which indicators need). Only after the baseline is frozen."""
+        if not self._baseline_frozen or not self.obs:
+            return 0
+        removed = 0
+        for key in list(self._by_ap):
+            obs = self._by_ap[key]
+            keep = obs[:self.HEAD] + [o for o in obs[self.HEAD:] if o["ts"] >= before_ts]
+            removed += len(obs) - len(keep)
+            self._by_ap[key] = keep
+            self._ts[key] = [o["ts"] for o in keep]
+        if removed:
+            heads = {id(o) for obs in self._by_ap.values() for o in obs}
+            self.obs = [o for o in self.obs if id(o) in heads]
+        return removed
 
     def aps(self) -> List[Tuple[str, str]]:
         return sorted(self._by_ap)

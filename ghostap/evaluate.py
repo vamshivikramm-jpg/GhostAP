@@ -32,7 +32,8 @@ from typing import Dict, List, Optional, Tuple
 
 from .collector import collect_pcap
 from .indicators import Analyzer
-from .risk import RiskEngine, duplicate_ssid_detector, load_config
+from .config import ConfigError, load_config
+from .risk import RiskEngine, duplicate_ssid_detector
 from .storage import Store
 
 DETECTORS = ("ghostap", "baseline")
@@ -498,7 +499,11 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 1
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print("[!] settings problem: {}".format(e), file=sys.stderr)
+        return 2
     print("[+] evaluating {} captures ...".format(len(pairs)))
     rows, metrics, sweep, scen = evaluate(pairs, cfg, args.unlabelled)
     charts = write_results(args.out, rows, metrics, sweep, scen, cfg, charts=not args.no_charts)

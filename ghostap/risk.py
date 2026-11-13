@@ -19,36 +19,18 @@ Run:
 from __future__ import annotations
 
 import argparse
-import copy
-import os
 import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .config import DEFAULT_CONFIG, ConfigError, load_config  # noqa: F401 (re-exported)
 from .indicators import Analyzer, IndicatorResult
 from .parser import HIDDEN_SSID
 from .storage import Store
 
 LOW, MEDIUM, HIGH = "LOW", "MEDIUM", "HIGH"
 _LEVEL_ORDER = {LOW: 0, MEDIUM: 1, HIGH: 2}
-
-DEFAULT_CONFIG = {
-    "baseline_minutes": 2.0,
-    "weights": {
-        "security_downgrade": 3.0,
-        "new_bssid_oui": 2.0,
-        "tsf_anomaly": 2.0,
-        "ie_fingerprint": 2.5,
-        "bssid_conflict": 2.5,
-        "rssi_jump": 1.5,
-        "channel_deviation": 1.0,
-        "beacon_interval_mismatch": 1.0,
-    },
-    "thresholds": {"medium": 30.0, "high": 60.0},
-    "temporal": {"step_seconds": 10.0, "window_seconds": 10.0, "smoothing_steps": 3},
-    "known_bssids": [],
-}
 
 # Innocent explanations an analyst should rule out before acting on an alert.
 BENIGN_CAUSES = {
@@ -93,25 +75,6 @@ BENIGN_CAUSES = {
 # --------------------------------------------------------------------------- #
 # Config and scoring
 # --------------------------------------------------------------------------- #
-
-def _merge(base: dict, override: dict) -> dict:
-    out = copy.deepcopy(base)
-    for k, v in (override or {}).items():
-        if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _merge(out[k], v)
-        else:
-            out[k] = v
-    return out
-
-
-def load_config(path: Optional[str] = "config.yaml") -> dict:
-    """Read config.yaml (if it exists) on top of the built-in defaults."""
-    if path and os.path.exists(path):
-        import yaml
-        with open(path) as f:
-            return _merge(DEFAULT_CONFIG, yaml.safe_load(f) or {})
-    return copy.deepcopy(DEFAULT_CONFIG)
-
 
 def risk_score(results: Sequence[IndicatorResult], weights: Dict[str, float]) -> Tuple[float, List[dict]]:
     """R = sum(w_i x_i) / sum(w_i) * 100, plus each indicator's share of R."""
@@ -189,7 +152,7 @@ class RiskEngine:
         """(regular steps not yet evaluated, optional final partial step)."""
         if not self.an.obs:
             return [], None
-        start, end = self.an.baseline.end, self.an.obs[-1]["ts"]
+        start, end = self.an.scoring_start, self.an.obs[-1]["ts"]
         if end <= start:
             return [], None               # still learning the baseline
         t = self._next_grid if self._next_grid is not None else start + self.step
@@ -218,8 +181,8 @@ class RiskEngine:
         grid, partial = self._schedule(final)
         if grid:
             self._next_grid = grid[-1] + self.step
-        elif self._next_grid is None and self.an.obs and self.an.obs[-1]["ts"] > self.an.baseline.end:
-            self._next_grid = self.an.baseline.end + self.step
+        elif self._next_grid is None and self.an.obs and self.an.obs[-1]["ts"] > self.an.scoring_start:
+            self._next_grid = self.an.scoring_start + self.step
 
         touched = set()
         for t in grid + ([partial] if partial is not None else []):
@@ -328,7 +291,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--config", default="config.yaml")
     args = ap.parse_args(argv)
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print("[!] settings problem: {}".format(e), file=sys.stderr)
+        return 2
     engine = RiskEngine.from_db(args.db, cfg)
     if not engine.an.obs:
         print("[!] no observations in {} - run the collector first".format(args.db), file=sys.stderr)

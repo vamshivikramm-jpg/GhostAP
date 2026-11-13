@@ -19,10 +19,13 @@ import time
 from typing import List, Optional
 
 from .collector import LIVE_HELP, collect_live
+from .logs import get_logger
 from .indicators import Analyzer
 from .parser import parse_frame
 from .risk import DuplicateSSIDDetector, RiskEngine, duplicate_ssid_detector, load_config
 from .storage import Store
+
+log = get_logger("pipeline")
 
 
 def rescore(db: str, config: dict) -> dict:
@@ -44,13 +47,16 @@ def rescore(db: str, config: dict) -> dict:
 class IncrementalScorer:
     """Keeps an Analyzer / RiskEngine alive and feeds it only new database rows."""
 
-    def __init__(self, db: str, config: dict):
+    def __init__(self, db: str, config: dict, monitored: Optional[dict] = None):
         self.db = db
         self.config = config
-        self.analyzer = Analyzer((), config["baseline_minutes"], config.get("known_bssids") or ())
+        self.analyzer = Analyzer((), config["baseline_minutes"], config.get("known_bssids") or (),
+                                 monitored=monitored)
         self.engine = RiskEngine(self.analyzer, config)
         self.duplicates = DuplicateSSIDDetector()
         self.last_id = 0
+        self._last_prune_ts: Optional[float] = None
+        self.pruned = 0
 
     def step(self, final: bool = False) -> dict:
         with Store(self.db) as store:
@@ -68,8 +74,27 @@ class IncrementalScorer:
             store.save_latest(report.latest)
             store.save_alerts("ghostap", report.alerts)
             store.save_alerts("baseline", self.duplicates.alerts())
+            self._retention(store)
         return {"new_frames": len(new), "new_rows": len(report.timeline),
                 "alerts": len(report.alerts)}
+
+    def _retention(self, store: Store) -> None:
+        """F070: drop raw frames older than retention.raw_hours (capture time)."""
+        r = self.config.get("retention", {})
+        keep_h = float(r.get("raw_hours") or 0)
+        if keep_h <= 0 or not self.analyzer.obs:
+            return
+        now = self.analyzer.obs[-1]["ts"]
+        every = float(r.get("check_minutes", 10)) * 60
+        if self._last_prune_ts is not None and now - self._last_prune_ts < every:
+            return
+        self._last_prune_ts = now
+        cutoff = now - keep_h * 3600
+        n = store.prune_observations(cutoff)
+        self.analyzer.prune(cutoff)
+        if n:
+            self.pruned += n
+            log.info("retention: removed %d raw frames older than %.1f h", n, keep_h)
 
 
 class Pipeline:
@@ -77,7 +102,12 @@ class Pipeline:
                  iface: Optional[str] = None, speed: float = 10.0,
                  duration: Optional[float] = None, rescore_seconds: float = 2.0,
                  reset: bool = True, hop: Optional[List[int]] = None, dwell: float = 0.25,
-                 save_pcap: Optional[str] = None):
+                 save_pcap: Optional[str] = None, monitored: Optional[dict] = None,
+                 on_finish=None):
+        """monitored: saved baselines (F014) to use from the first frame.
+        on_finish(status): called once ingest and the final scoring round are done."""
+        self.monitored = monitored
+        self.on_finish = on_finish
         if pcap and iface:
             raise ValueError("use either pcap or iface, not both")
         self.db = db
@@ -222,7 +252,9 @@ class Pipeline:
             self._ingest_done.set()
 
     def _score_loop(self) -> None:
-        scorer = IncrementalScorer(self.db, self.config)
+        scorer = IncrementalScorer(self.db, self.config, self.monitored)
+        log.info("scoring started (%s: %s)%s", self.status["mode"], self.status["source"],
+                 " with %d monitored network(s)" % len(self.monitored) if self.monitored else "")
         while True:
             finished = self._ingest_done.wait(self.rescore_seconds)
             try:
@@ -233,8 +265,16 @@ class Pipeline:
                     kw["data_version"] = self.status["data_version"] + 1
                 self._set(**kw)
             except Exception as e:
+                log.exception("rescoring failed")
                 self._set(message="rescoring failed: {}: {}".format(type(e).__name__, e))
             if finished or self._stop.is_set():
                 break
         if self.status["state"] == "running":
             self._set(state="done" if not self._stop.is_set() else "stopped")
+        self._set(pruned_frames=scorer.pruned)
+        log.info("scoring finished: %s, %s frames", self.status["state"], self.status["frames"])
+        if self.on_finish:
+            try:
+                self.on_finish(self.snapshot())
+            except Exception:
+                log.exception("on_finish callback failed")

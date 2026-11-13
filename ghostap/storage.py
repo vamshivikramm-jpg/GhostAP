@@ -67,6 +67,17 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 CREATE INDEX IF NOT EXISTS idx_alerts_score ON alerts(score);
 
+-- F069: permanent record of analyst and admin actions.
+CREATE TABLE IF NOT EXISTS audit (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts      REAL NOT NULL,
+    actor   TEXT NOT NULL,             -- account name, "token", "local" or "system"
+    action  TEXT NOT NULL,             -- e.g. triage, baseline.save, settings.save
+    target  TEXT,
+    detail  TEXT                       -- JSON
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit(ts);
+
 -- Latest score and indicator breakdown of every AP (for the dashboard's AP view).
 CREATE TABLE IF NOT EXISTS ap_latest (
     ssid        TEXT NOT NULL,
@@ -121,8 +132,12 @@ class Store:
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
+        new_file = not os.path.exists(path)
         self.conn = sqlite3.connect(path, timeout=30)
         self.conn.row_factory = sqlite3.Row
+        if new_file:
+            # lets retention (F070) give pruned space back with PRAGMA incremental_vacuum
+            self.conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
         # WAL lets the dashboard read while a replay / live capture writes.
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
@@ -359,6 +374,50 @@ class Store:
                 "UPDATE alerts SET triage_status = ?, triage_note = ?, triage_ts = ? WHERE id = ?",
                 (status, (note or "")[:2000], ts, alert_id))
         return cur.rowcount > 0
+
+    # ---- F069 audit log -------------------------------------------------------- #
+
+    def audit(self, actor: str, action: str, target: Optional[str] = None,
+              detail: Optional[dict] = None, ts: Optional[float] = None) -> None:
+        import time as _time
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO audit (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)",
+                (ts if ts is not None else _time.time(), actor, action, target,
+                 json.dumps(detail or {})))
+
+    def audit_log(self, limit: int = 200, action: Optional[str] = None) -> List[dict]:
+        sql, params = "SELECT * FROM audit", []
+        if action:
+            sql += " WHERE action = ?"
+            params.append(action)
+        sql += " ORDER BY ts DESC, id DESC LIMIT ?"
+        params.append(int(limit))
+        out = []
+        for r in self.conn.execute(sql, params).fetchall():
+            d = dict(r)
+            d["detail"] = json.loads(d["detail"]) if d["detail"] else {}
+            out.append(d)
+        return out
+
+    # ---- F070 retention ---------------------------------------------------------- #
+
+    def prune_observations(self, before_ts: float, keep_head: int = 50) -> int:
+        """Delete raw frames older than `before_ts`, keeping each AP's first `keep_head`
+        frames (GhostAP needs them for 'uptime when first seen'). AP profiles, alerts and
+        the risk timeline are unaffected. Returns the number of rows deleted."""
+        self.commit()
+        with self.conn:
+            cur = self.conn.execute(
+                "DELETE FROM observations WHERE ts < ? AND id NOT IN ("
+                " SELECT id FROM (SELECT id, ROW_NUMBER() OVER ("
+                "   PARTITION BY ssid, bssid ORDER BY ts, id) AS rn FROM observations) WHERE rn <= ?)",
+                (before_ts, keep_head))
+        deleted = cur.rowcount
+        if deleted:
+            self.conn.execute("PRAGMA incremental_vacuum")
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return deleted
 
     def close(self) -> None:
         self.commit()

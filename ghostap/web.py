@@ -29,12 +29,14 @@ import secrets
 import sys
 import time
 from collections import defaultdict
+from types import SimpleNamespace
 from typing import List, Optional
 
 from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory
 
 from .pipeline import Pipeline
-from .risk import load_config
+from .sessions import SessionError, SessionStore
+from .config import ConfigError, load_config
 from .storage import Store
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -82,7 +84,8 @@ def _plotly_js() -> Optional[str]:
 
 def create_app(db: str, config: Optional[dict] = None,
                pipeline: Optional[Pipeline] = None, token: Optional[str] = None,
-               local_only: bool = True) -> Flask:
+               local_only: bool = True, sessions: Optional[SessionStore] = None,
+               current_session: Optional[str] = None, admin_db: Optional[str] = None) -> Flask:
     """Build the Flask app.
 
     local_only: refuse requests whose Host header is not a loopback name/address
@@ -129,14 +132,58 @@ def create_app(db: str, config: Optional[dict] = None,
             resp.headers["Cache-Control"] = "no-store"
         return resp
 
+    started = time.time()
+
+    def viewed_session() -> Optional[str]:
+        """?session=<id> selects a past session; absent = the current one."""
+        sid = request.args.get("session") or None
+        return None if sid in (None, current_session) else sid
+
+    def db_path() -> str:
+        sid = viewed_session()
+        if sid is None:
+            return db
+        if sessions is None:
+            abort(404)
+        try:
+            return sessions.get(sid).db
+        except SessionError:
+            abort(404)
+
     def store() -> Store:
-        return Store(db)
+        return Store(db_path())
 
     def status() -> dict:
-        if pipeline is not None:
-            return pipeline.snapshot()
-        return {"mode": "database", "source": db, "state": "done", "frames": None,
-                "message": "", "speed": None, "data_version": 0}
+        sid = viewed_session()
+        if sid is not None:
+            meta = sessions.get(sid).meta()
+            return {"mode": "session", "source": meta.get("name", sid), "state": "done", "frames": None,
+                    "message": "", "speed": None, "data_version": 0, "session": sid}
+        st = pipeline.snapshot() if pipeline is not None else {
+            "mode": "database", "source": db, "state": "done", "frames": None,
+            "message": "", "speed": None, "data_version": 0}
+        st["session"] = current_session
+        return st
+
+    def actor() -> str:
+        return "token" if token else "local"
+
+    def json_body():
+        """The request's JSON object, or a (response, status) tuple to return."""
+        body = request.get_json(silent=True)
+        if not request.is_json or not isinstance(body, dict):
+            return None, (jsonify({"error": "expected a JSON body"}), 415)
+        return body, None
+
+    def audit(action: str, target: Optional[str] = None, detail: Optional[dict] = None) -> None:
+        with Store(admin_db or db) as s:
+            s.audit(actor(), action, target, detail)
+
+    ctx = SimpleNamespace(cfg=cfg, db=db, pipeline=pipeline, sessions=sessions, started=started,
+                          current_session=current_session, admin_db=admin_db or db,
+                          store=store, status=status, db_path=db_path, actor=actor,
+                          json_body=json_body, audit=audit, viewed_session=viewed_session)
+    app.extensions["ghostap"] = ctx
 
     # -- pages -------------------------------------------------------------- #
 
@@ -330,9 +377,18 @@ def create_app(db: str, config: Optional[dict] = None,
         if status_ not in Store.TRIAGE_STATES or (note is not None and not isinstance(note, str)):
             return jsonify({"error": "status must be one of " + ", ".join(Store.TRIAGE_STATES)}), 400
         with store() as s:
-            if not s.set_triage(alert_id, status_, note, time.time()):
+            before = s.alert(alert_id)
+            if before is None or not s.set_triage(alert_id, status_, note, time.time()):
                 abort(404)
-            return jsonify(s.alert(alert_id))
+            after = s.alert(alert_id)
+        audit("triage", "{} {}".format(after["ssid"], after["bssid"]),
+              {"alert": alert_id, "session": viewed_session() or current_session,
+               "from": before.get("triage_status") or "new", "to": status_,
+               "note_changed": (before.get("triage_note") or "") != (note or "")})
+        return jsonify(after)
+
+    from . import web_admin
+    web_admin.register(app, ctx)
 
     @app.get("/api/timeline")
     def timeline():
@@ -379,11 +435,11 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m ghostap.web",
                                  description="GhostAP dashboard (Flask + Plotly).")
     src = ap.add_mutually_exclusive_group()
-    src.add_argument("--pcap", help="replay a pcap into --db while the dashboard runs")
+    src.add_argument("--pcap", help="replay a pcap (a new session is created)")
     src.add_argument("--iface", help="live capture on a monitor-mode interface (Linux, root)")
+    ap.add_argument("--name", help="name for the new session (default: from the pcap / interface)")
     ap.add_argument("--db", default=None,
-                    help="SQLite database (default: data/ghostap.db, data/replay.db for "
-                         "--pcap, data/live.db for --iface)")
+                    help="use this database instead of a session (older behaviour)")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--speed", type=float, default=10.0,
                     help="replay speed multiplier; 0 = as fast as possible (default 10)")
@@ -392,17 +448,20 @@ def main(argv=None) -> int:
                     help="live: hop channels, e.g. 1,6,11 or 1-13 or 2.4 or 5 or all")
     ap.add_argument("--dwell", type=float, default=0.25, help="live: seconds per channel (default 0.25)")
     ap.add_argument("--save-pcap", metavar="FILE",
-                    help="live: also save captured beacons / probe responses to a pcap")
+                    help="live: record to this pcap (default: capture.pcap in the session folder)")
+    ap.add_argument("--no-record", action="store_true", help="live: do not record a pcap")
+    mon = ap.add_mutually_exclusive_group()
+    mon.add_argument("--monitored", metavar="FILE",
+                     help="use this saved baseline (default for live capture: config monitored_networks)")
+    mon.add_argument("--no-monitored", action="store_true", help="ignore saved baselines; learn everything")
     ap.add_argument("--keep", action="store_true",
-                    help="keep existing data in --db instead of starting fresh (replay/live)")
+                    help="with --db: keep existing data instead of starting fresh")
     ap.add_argument("--host", default="127.0.0.1",
                     help="address to listen on (default 127.0.0.1). Anything else, e.g. 0.0.0.0 "
                          "to reach Kali in a VM from the host, turns on token login")
     ap.add_argument("--port", type=int, default=8050)
     args = ap.parse_args(argv)
 
-    db = args.db or ("data/replay.db" if args.pcap else "data/live.db" if args.iface
-                     else "data/ghostap.db")
     if args.pcap and not os.path.exists(args.pcap):
         print("[!] pcap not found: {}".format(args.pcap), file=sys.stderr)
         return 1
@@ -413,16 +472,70 @@ def main(argv=None) -> int:
             hop = parse_channels(args.hop)
         except ValueError as e:
             ap.error(str(e))
-    if (args.hop or args.save_pcap) and not args.iface:
-        ap.error("--hop and --save-pcap only apply to live capture (--iface)")
-    cfg = load_config(args.config)
+    if (args.hop or args.save_pcap or args.no_record) and not args.iface:
+        ap.error("--hop, --save-pcap and --no-record only apply to live capture (--iface)")
+    try:
+        cfg = load_config(args.config)
+    except ConfigError as e:
+        print("[!] settings problem: {}".format(e), file=sys.stderr)
+        return 2
+    from .logs import setup_logging
+    log = setup_logging(cfg)
+
+    # ---- where the data goes: a new session per run (F040), or an explicit --db
+    sessions = SessionStore(cfg["sessions_dir"])
+    session = None
+    if args.db:
+        db = args.db
+    elif args.pcap or args.iface:
+        mode = "replay" if args.pcap else "live"
+        default_name = (os.path.splitext(os.path.basename(args.pcap))[0] if args.pcap
+                        else "live {}".format(args.iface))
+        session = sessions.create(args.name or default_name, mode, args.pcap or args.iface)
+        db = session.db
+    else:
+        session = sessions.latest()
+        db = session.db if session else "data/ghostap.db"
+    save_pcap = args.save_pcap
+    if args.iface and not save_pcap and not args.no_record:
+        save_pcap = session.pcap if session else None
+
+    # ---- saved baseline (F014): live uses it by default, replays only on request
+    monitored = None
+    mon_path = None if args.no_monitored else (
+        args.monitored or (cfg["monitored_networks"] if args.iface else None))
+    if mon_path and os.path.exists(mon_path):
+        from . import monitored as monitored_mod
+        try:
+            monitored = monitored_mod.baselines(monitored_mod.load(mon_path), cfg["known_bssids"]) or None
+        except (ValueError, OSError) as e:
+            print("[!] cannot use saved baseline {}: {}".format(mon_path, e), file=sys.stderr)
+            return 2
+    elif args.monitored:
+        print("[!] saved baseline not found: {}".format(args.monitored), file=sys.stderr)
+        return 1
+
+    def finished(st):
+        if session is not None:
+            session.update_meta(ended_at=time.time(), frames=st.get("frames"), state=st.get("state"))
+
     pipe = Pipeline(db, cfg, pcap=args.pcap, iface=args.iface, speed=args.speed,
-                    duration=args.duration, reset=not args.keep, hop=hop, dwell=args.dwell,
-                    save_pcap=args.save_pcap).start()
+                    duration=args.duration, reset=not args.keep if args.db else True, hop=hop,
+                    dwell=args.dwell, save_pcap=save_pcap, monitored=monitored,
+                    on_finish=finished).start()
     local = is_loopback(args.host)
     token = None if local else (os.environ.get("GHOSTAP_TOKEN") or secrets.token_urlsafe(24))
-    app = create_app(db, cfg, pipe, token=token, local_only=local)
+    admin_db = os.path.join(os.path.dirname(cfg["sessions_dir"].rstrip("/")) or ".", "admin.db")
+    app = create_app(db, cfg, pipe, token=token, local_only=local, sessions=sessions,
+                     current_session=session.id if session else None, admin_db=admin_db)
     mode = pipe.status["mode"]
+    log.info("dashboard start: mode=%s source=%s session=%s monitored=%s host=%s port=%s",
+             mode, pipe.status["source"], session.id if session else db,
+             len(monitored) if monitored else 0, args.host, args.port)
+    if session is not None:
+        print("[+] session: {}".format(session.path))
+    if monitored:
+        print("[+] using saved baseline for {} network(s): scoring starts immediately".format(len(monitored)))
     if local:
         print("[+] GhostAP dashboard ({}: {}) -> http://{}:{}".format(
             mode, pipe.status["source"], "127.0.0.1" if args.host in ("localhost", "::1") else args.host,
