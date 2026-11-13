@@ -95,6 +95,8 @@ def test_roles(env):
     assert viewer.post("/api/logout").status_code == 200
     assert analyst.post("/api/viewer_links", json={"name": "examiner", "hours": 2}).status_code == 200
     assert analyst.get("/api/users").status_code == 403 and analyst.get("/api/keys").status_code == 403
+    assert analyst.get("/api/settings").status_code == 403
+    assert analyst.post("/api/settings/reset", json={}).status_code == 403
     assert boss.get("/api/users").status_code == 200
     r = boss.post("/api/users", json={"username": "eve", "password": PW, "role": "analyst"})
     assert r.status_code == 200

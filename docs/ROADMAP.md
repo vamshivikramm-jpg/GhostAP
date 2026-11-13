@@ -121,11 +121,11 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F068 | System health page | A | done |
 | F069 | Audit log | A | done |
 | F070 | Data retention | A | done |
-| F071 | Run as a service | H | todo |
+| F071 | Run as a service | H | done* (unit and install script checked here; systemd runs only on your Kali) |
 | F072 | Settings validation | A | done |
-| F073 | Docker image | H | todo |
+| F073 | Docker image | H | done* (Docker not installed here: files checked by tests, image not built) |
 | F074 | Log files | A | done |
-| F075 | Settings page | H | todo |
+| F075 | Settings page | H | done |
 | F076 | Guided tour | D | done |
 | F077 | Glossary tooltips | D | done |
 | F078 | Command palette | D | done |

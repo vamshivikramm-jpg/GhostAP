@@ -1,0 +1,38 @@
+# GhostAP with Docker Compose (F073).
+#   docker compose up demo                      # synthetic demo replay on http://127.0.0.1:8050
+#   GHOSTAP_IFACE=wlan1mon docker compose --profile live up live
+# Put GHOSTAP_TOKEN=<long random text> in a .env file next to this file (not in git).
+services:
+  demo:
+    build: .
+    image: ghostap:local
+    ports: ["127.0.0.1:8050:8050"]
+    environment:
+      GHOSTAP_TOKEN: ${GHOSTAP_TOKEN:?set GHOSTAP_TOKEN in .env}
+    volumes: ["ghostap-data:/app/data"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  live:
+    profiles: ["live"]
+    image: ghostap:local
+    build: .
+    # The adapter must already be in monitor mode on the host: sudo tools/kali_monitor.sh start wlan1
+    network_mode: host                # see the host's Wi-Fi interfaces
+    user: root                        # capabilities below only reach root in a container
+    cap_drop: ["ALL"]
+    cap_add: ["NET_RAW", "NET_ADMIN"] # receive frames; NET_ADMIN only for channel hopping
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      GHOSTAP_TOKEN: ${GHOSTAP_TOKEN:?set GHOSTAP_TOKEN in .env}
+    command: ["--iface", "${GHOSTAP_IFACE:-wlan1mon}", "--hop", "1,6,11", "--https"]
+    volumes: ["ghostap-data:/app/data"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    restart: unless-stopped
+
+volumes:
+  ghostap-data:

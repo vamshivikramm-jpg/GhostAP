@@ -1,0 +1,9 @@
+.git
+.github
+.venv
+data
+results
+**/__pycache__
+*.pyc
+docs/*.docx
+.claude

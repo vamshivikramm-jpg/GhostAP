@@ -610,3 +610,14 @@ body.role-viewer [data-trust], body.role-viewer .checklist input { display: none
 .ds { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
 .ds.on { border-color: var(--accent); background: var(--accent-soft); }
 .ds input { margin-top: 4px; accent-color: var(--accent); }
+
+/* F075 settings page */
+.settings-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px 18px; }
+.setting { display: grid; gap: 4px; align-content: start; }
+.setting label { font-size: 13px; font-weight: 600; }
+.setting.dirty .input { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.switch-row { display: flex; gap: 8px; align-items: center; font-weight: 600; font-size: 13px; }
+.switch-row input { accent-color: var(--accent); width: 18px; height: 18px; }
+.save-bar { position: sticky; bottom: 12px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; padding: 10px 14px;
+  border-radius: 12px; background: var(--surface); border: 1px solid var(--accent); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); z-index: 20; }
+.save-bar span { margin-right: auto; font-weight: 600; }
