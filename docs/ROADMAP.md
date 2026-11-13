@@ -62,7 +62,7 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F009 | Wi-Fi 6 / 6E awareness | B | done* |
 | F010 | Passive hidden-network matching | B | done |
 | F011 | Per-network sensitivity | B | done |
-| F012 | Incident correlation | B | API done, card in D |
+| F012 | Incident correlation | B | done |
 | F013 | Alert throttling and re-alerting | E | todo (moved: throttling belongs with notifications) |
 | F014 | Saved network baselines | A | done |
 | F015 | Monitored Networks page | C | done |
@@ -70,14 +70,14 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F017 | Accept a change into the baseline | C | done |
 | F018 | New-network inbox | C | done |
 | F019 | Allow-list editor | C | done |
-| F020 | Incident story card | D | todo |
-| F021 | Sensor heartbeat | D | todo |
+| F020 | Incident story card | D | done |
+| F021 | Sensor heartbeat | D | done |
 | F022 | Customisable layout | D | todo |
 | F023 | "Since you last looked" | D | todo |
-| F024 | Alert filters and sorting | D | todo |
-| F025 | Bulk triage | D | todo |
-| F026 | Snooze and mute rules | D | todo |
-| F027 | Triage history | D | todo |
+| F024 | Alert filters and sorting | D | done |
+| F025 | Bulk triage | D | done |
+| F026 | Snooze and mute rules | D | done |
+| F027 | Triage history | D | done |
 | F028 | Beacon difference viewer | D | todo |
 | F029 | Vendor names | D | todo |
 | F030 | Signal and uptime charts | D | todo |
@@ -90,9 +90,9 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F037 | Timeline annotations | D | todo |
 | F038 | Large-site performance | D | todo |
 | F039 | Table export and columns | D | todo |
-| F040 | Sessions page | A | API done, page in D |
+| F040 | Sessions page | A | done |
 | F041 | Capture control panel | J | todo |
-| F042 | Capture quality panel | B | API done, panel in D |
+| F042 | Capture quality panel | B | done |
 | F043 | Smart channel hopping | B | done |
 | F044 | Several sensors | J | todo |
 | F045 | Rough location | J | todo |
@@ -118,8 +118,8 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F065 | Analyst accounts and roles | F | todo |
 | F066 | Two-factor sign-in | F | todo |
 | F067 | Session management | F | todo |
-| F068 | System health page | A | API done, page in D |
-| F069 | Audit log | A | API done, page in D |
+| F068 | System health page | A | done |
+| F069 | Audit log | A | done |
 | F070 | Data retention | A | done |
 | F071 | Run as a service | H | todo |
 | F072 | Settings validation | A | done |

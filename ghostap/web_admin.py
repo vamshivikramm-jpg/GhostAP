@@ -120,6 +120,67 @@ def register(app, ctx) -> None:
                         "damaged_frames": st.get("rejected") or {}, "hopping": st.get("hopping"),
                         "deauth_events": events})
 
+    # ---------------------------------------------------------------- F026 mutes
+    @app.get("/api/mutes")
+    def mutes_list():
+        return jsonify(ctx.active_mutes())
+
+    @app.post("/api/mutes")
+    def mutes_add():
+        body, err = ctx.json_body()
+        if err:
+            return err
+        kind, value, hours = body.get("kind"), body.get("value"), body.get("hours")
+        if kind not in ("bssid", "ssid") or not isinstance(value, str) or not value:
+            return jsonify({"error": "mute an access point (bssid) or a network (ssid)"}), 400
+        if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours <= 24 * 30:
+            return jsonify({"error": "hours must be between 0 and 720"}), 400
+        note = body.get("note") if isinstance(body.get("note"), str) else ""
+        with Store(ctx.admin_db) as s:
+            mid = s.add_mute(kind, value, time.time() + hours * 3600, ctx.actor(), note)
+        ctx.audit("mute.add", "{} {}".format(kind, value), {"hours": hours, "note": note})
+        return jsonify({"id": mid})
+
+    @app.post("/api/mutes/<int:mute_id>/delete")
+    def mutes_delete(mute_id):
+        with Store(ctx.admin_db) as s:
+            if not s.delete_mute(mute_id):
+                abort(404)
+        ctx.audit("mute.remove", str(mute_id))
+        return jsonify({"deleted": mute_id})
+
+    # ---------------------------------------------------------------- F025 bulk triage, F027 history
+    @app.post("/api/alerts/triage_bulk")
+    def triage_bulk():
+        body, err = ctx.json_body()
+        if err:
+            return err
+        ids, status_ = body.get("ids"), body.get("status")
+        if (not isinstance(ids, list) or not ids or len(ids) > 500
+                or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+            return jsonify({"error": "ids must be a list of alert numbers"}), 400
+        if status_ not in Store.TRIAGE_STATES:
+            return jsonify({"error": "status must be one of " + ", ".join(Store.TRIAGE_STATES)}), 400
+        done = []
+        with ctx.store() as s:
+            for i in ids:
+                a = s.alert(i)
+                if a and s.set_triage(i, status_, a.get("triage_note"), time.time()):
+                    done.append(i)
+        ctx.audit("triage.bulk", "{} alerts".format(len(done)),
+                  {"alerts": done, "to": status_, "session": ctx.viewed_session() or ctx.current_session})
+        return jsonify({"updated": done})
+
+    @app.get("/api/alerts/<int:alert_id>/history")
+    def triage_history(alert_id):
+        sess = ctx.viewed_session() or ctx.current_session
+        with Store(ctx.admin_db) as s:
+            rows = s.audit_log(2000)
+        out = [r for r in rows if r["action"] in ("triage", "triage.bulk")
+               and (r["detail"].get("alert") == alert_id or alert_id in (r["detail"].get("alerts") or []))
+               and r["detail"].get("session") == sess]
+        return jsonify(out)
+
     # ---------------------------------------------------------------- F012 incidents
     @app.get("/api/incidents")
     def incidents():

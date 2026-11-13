@@ -40,6 +40,13 @@ from .config import ConfigError, load_config
 from .storage import Store
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+ATTACK_DETECTORS = "ghostap,deauth,flood"
+
+
+def is_muted(alert: dict, mutes: List[dict]) -> bool:
+    """F026: an alert is muted while a rule for its AP or its network is active."""
+    return any((m["kind"] == "bssid" and m["value"] == alert.get("bssid"))
+               or (m["kind"] == "ssid" and m["value"] == alert.get("ssid")) for m in mutes)
 LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1"}
 TOKEN_COOKIE = "ghostap_token"  # noqa: S105 - the cookie's name, not a secret
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -176,6 +183,10 @@ def create_app(db: str, config: Optional[dict] = None,
             return None, (jsonify({"error": "expected a JSON body"}), 415)
         return body, None
 
+    def active_mutes() -> List[dict]:
+        with Store(admin_db or db) as s:
+            return s.active_mutes(time.time())
+
     def audit(action: str, target: Optional[str] = None, detail: Optional[dict] = None) -> None:
         with Store(admin_db or db) as s:
             s.audit(actor(), action, target, detail)
@@ -184,6 +195,7 @@ def create_app(db: str, config: Optional[dict] = None,
                           current_session=current_session, admin_db=admin_db or db,
                           store=store, status=status, db_path=db_path, actor=actor,
                           json_body=json_body, audit=audit, viewed_session=viewed_session,
+                          active_mutes=active_mutes,
                           config_path=config_path,
                           monitored_path=monitored_path or cfg.get("monitored_networks") or "data/monitored.json")
     app.extensions["ghostap"] = ctx
@@ -216,25 +228,33 @@ def create_app(db: str, config: Optional[dict] = None,
             row = s.conn.execute(
                 "SELECT COUNT(*) AS aps, COUNT(DISTINCT ssid) AS ssids, COALESCE(SUM(frames), 0) AS n, "
                 "MIN(first_seen) AS t0, MAX(last_seen) AS t1 FROM ap_profiles").fetchone()
-            open_levels = dict(s.conn.execute(
-                "SELECT level, COUNT(*) FROM alerts WHERE detector='ghostap' "
-                "AND COALESCE(triage_status, 'new') != 'false_positive' GROUP BY level").fetchall())
-            dismissed = s.conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE detector='ghostap' AND triage_status='false_positive'"
-            ).fetchone()[0]
+            attacks = s.alerts(ATTACK_DETECTORS)
+            t1 = row["t1"]
+            recent = s.conn.execute("SELECT COUNT(*) FROM observations WHERE ts > ?",
+                                    ((t1 or 0) - 60,)).fetchone()[0] if t1 else 0
             n_base = s.conn.execute(
                 "SELECT COUNT(*) FROM alerts WHERE detector='baseline'").fetchone()[0]
             triage_v = s.conn.execute(
                 "SELECT COALESCE(MAX(triage_ts), 0), COUNT(*) FROM alerts").fetchone()
-            top = [a for a in s.alerts("ghostap") if a.get("triage_status") != "false_positive"][:1]
+        mutes = active_mutes()
+        open_alerts = [a for a in attacks if a.get("triage_status") != "false_positive" and not is_muted(a, mutes)]
+        open_levels = {}
+        for a in open_alerts:
+            open_levels[a["level"]] = open_levels.get(a["level"], 0) + 1
+        dismissed = sum(1 for a in attacks if a.get("triage_status") == "false_positive")
+        top = open_alerts[:1]
         st = status()
         t0 = row["t0"]
         baseline_s = cfg["baseline_minutes"] * 60
         return jsonify({
             "status": st,
             # changes whenever scores, alerts or triage change: the page refetches only then
-            "data_version": "{}-{}-{}-{}".format(st.get("data_version", 0), triage_v[0], triage_v[1],
-                                                 row["aps"]),
+            "data_version": "{}-{}-{}-{}-{}".format(st.get("data_version", 0), triage_v[0], triage_v[1],
+                                                    row["aps"], ",".join(str(m["id"]) for m in mutes)),
+            "heartbeat": {"frames_last_minute": recent,                       # F021
+                          "last_frame_age_s": (round(time.time() - st["last_frame_ts"], 1)
+                                               if st.get("mode") == "live" and st.get("last_frame_ts") else None)},
+            "muted_alerts": sum(1 for a in attacks if is_muted(a, mutes)),
             "frames": row["n"],
             "aps": row["aps"],
             "networks": row["ssids"],
@@ -246,7 +266,7 @@ def create_app(db: str, config: Optional[dict] = None,
             "alerts": {"HIGH": open_levels.get("HIGH", 0), "MEDIUM": open_levels.get("MEDIUM", 0)},
             "dismissed_alerts": dismissed,
             "baseline_alerts": n_base,
-            "top_alert": ({k: top[0][k] for k in ("id", "ssid", "bssid", "level", "score",
+            "top_alert": ({k: top[0][k] for k in ("id", "ssid", "bssid", "level", "score", "detector",
                                                   "first_ts", "reasons", "triage_status")}
                           if top else None),
             "thresholds": cfg["thresholds"],
@@ -355,7 +375,11 @@ def create_app(db: str, config: Optional[dict] = None,
     def alerts():
         detector = request.args.get("detector", "ghostap")
         with store() as s:
-            return jsonify(s.alerts(None if detector == "all" else detector))
+            rows = s.alerts(None if detector == "all" else detector)
+        mutes = active_mutes()
+        for a in rows:
+            a["muted"] = is_muted(a, mutes)
+        return jsonify(rows)
 
     @app.get("/api/alerts/<int:alert_id>")
     def alert_detail(alert_id: int):

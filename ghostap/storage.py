@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_bssid ON events(bssid, ts);
 CREATE INDEX IF NOT EXISTS idx_obs_ssid  ON observations(ssid);
 CREATE INDEX IF NOT EXISTS idx_obs_bssid ON observations(bssid);
+CREATE INDEX IF NOT EXISTS idx_obs_ts ON observations(ts);
+
+-- F026: mute an access point or a whole network for a while (kept in the admin database)
+CREATE TABLE IF NOT EXISTS mutes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,          -- bssid | ssid
+    value      TEXT NOT NULL,
+    until_ts   REAL NOT NULL,
+    created_ts REAL NOT NULL,
+    actor      TEXT,
+    note       TEXT
+);
 
 CREATE TABLE IF NOT EXISTS ap_profiles (
     ssid        TEXT    NOT NULL,
@@ -344,8 +356,9 @@ class Store:
         sql = "SELECT * FROM alerts"
         params: tuple = ()
         if detector:
-            sql += " WHERE detector = ?"
-            params = (detector,)
+            names = [d for d in detector.split(",") if d]
+            sql += " WHERE detector IN ({})".format(", ".join("?" for _ in names))
+            params = tuple(names)
         sql += " ORDER BY score DESC, first_ts"
         out = []
         for r in self.conn.execute(sql, params).fetchall():
@@ -409,6 +422,26 @@ class Store:
                 "UPDATE alerts SET triage_status = ?, triage_note = ?, triage_ts = ? WHERE id = ?",
                 (status, (note or "")[:2000], ts, alert_id))
         return cur.rowcount > 0
+
+    # ---- F026 mutes --------------------------------------------------------------- #
+
+    def add_mute(self, kind: str, value: str, until_ts: float, actor: str, note: str = "") -> int:
+        import time as _time
+        if kind not in ("bssid", "ssid"):
+            raise ValueError("kind must be bssid or ssid")
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO mutes (kind, value, until_ts, created_ts, actor, note) VALUES (?, ?, ?, ?, ?, ?)",
+                (kind, value.lower() if kind == "bssid" else value, until_ts, _time.time(), actor, note[:500]))
+        return cur.lastrowid
+
+    def active_mutes(self, now: float) -> List[dict]:
+        return [dict(r) for r in self.conn.execute(
+            "SELECT * FROM mutes WHERE until_ts > ? ORDER BY until_ts", (now,)).fetchall()]
+
+    def delete_mute(self, mute_id: int) -> bool:
+        with self.conn:
+            return self.conn.execute("DELETE FROM mutes WHERE id = ?", (mute_id,)).rowcount > 0
 
     # ---- F069 audit log -------------------------------------------------------- #
 

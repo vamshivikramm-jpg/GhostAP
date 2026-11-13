@@ -54,6 +54,7 @@
     evFilter: "all", sort: { key: "peak_score", dir: -1 }, search: "",
     aps: [], ghost: [], base: [], networks: [], series: [], events: [],
     known: null, plotBound: false, version: null, offline: false,
+    alertFilter: { level: "all", status: "open", q: "" }, picked: new Set(), incidents: [],
   };
 
   // ------------------------------------------------------------------ helpers
@@ -188,7 +189,16 @@
       `<span class="mono">${esc(st.source || "")}</span><span>${esc(clock)}</span>` +
       (st.hopping ? `<span>${esc(st.hopping)}</span>` : "") +
       (st.save_pcap ? `<span>recording → <span class="mono">${esc(st.save_pcap)}</span></span>` : "") +
-      damaged(st.rejected);
+      damaged(st.rejected) + heartbeat(s);
+  }
+
+  /** F021: in live mode, show beacons per minute and warn when the adapter goes quiet. */
+  function heartbeat(s) {
+    const hb = s.heartbeat || {};
+    if (hb.last_frame_age_s == null) return "";
+    const silent = hb.last_frame_age_s > 15;
+    return `<span class="pill ${silent ? "pill-bad" : ""}" title="${silent ? "No beacons recently: check monitor mode, the antenna and channel hopping" : "Beacons received in the last minute"}">
+      <i class="dot ${silent ? "error" : "running"}"></i>${silent ? "adapter silent " + Math.round(hb.last_frame_age_s) + " s" : Number(hb.frames_last_minute).toLocaleString() + " beacons/min"}</span>`;
   }
 
   function damaged(rej) {
@@ -214,6 +224,14 @@
       sub = `${Math.round(done)} of ${Math.round(s.baseline_seconds)} s. GhostAP first watches every network so it can spot what changes later. ${s.aps} access points heard so far.`;
       prog.hidden = false;
       prog.firstElementChild.style.width = Math.min(100, (100 * done) / s.baseline_seconds) + "%";
+    } else if (s.top_alert && s.top_alert.detector === "deauth") {
+      const a = s.top_alert;
+      cls = a.level === "HIGH" ? "high" : "medium"; title = `Deauthentication attack on “${a.ssid}”`;
+      sub = `Bursts of frames are disconnecting clients from ${a.bssid}. Attackers do this to push phones onto an evil twin; watch for a new access point using this name.`;
+      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">Inspect</button>`;
+    } else if (s.top_alert && s.top_alert.detector === "flood") {
+      cls = "high"; title = "Beacon flood: many fake networks appeared at once";
+      sub = "A large number of new radios appeared within a minute, which is typical of fake-AP generators.";
     } else if (s.top_alert && s.top_alert.level === "HIGH") {
       const a = s.top_alert, why = topReasonNames(a.reasons).slice(0, 3);
       cls = "high"; title = `Evil twin suspected on “${a.ssid}”`;
@@ -228,6 +246,7 @@
     } else {
       cls = "ok"; title = `All clear: ${s.aps} access point${s.aps === 1 ? "" : "s"} on ${s.networks} network${s.networks === 1 ? "" : "s"} look normal`;
       sub = (s.dismissed_alerts ? `${s.dismissed_alerts} alert${s.dismissed_alerts === 1 ? " was" : "s were"} marked as false positive by an analyst. ` : "") +
+        (s.muted_alerts ? `${s.muted_alerts} muted. ` : "") +
         (s.baseline_alerts
           ? `A name-only check would have raised ${s.baseline_alerts} alarm${s.baseline_alerts === 1 ? "" : "s"} here, because some networks have several access points.`
           : "No network name is shared between access points.");
@@ -275,11 +294,27 @@
         el.innerHTML = `<div class="empty">${learning ? "Alerts appear once the learning period is over." : "No alerts. Every access point looks consistent with what was learned."}</div>`;
         return;
       }
-      el.innerHTML = state.ghost.map((a) => `
-        <button class="item ${isSel(a) ? "selected" : ""} ${a.triage_status === "false_positive" ? "dismissed" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
+      const f = state.alertFilter;
+      const q = f.q.trim().toLowerCase();
+      const shown = state.ghost.filter((a) => (f.level === "all" || a.level === f.level)
+        && (f.status === "all" || (f.status === "open" ? a.triage_status !== "false_positive" && !a.muted
+          : f.status === "dismissed" ? a.triage_status === "false_positive" || a.muted : (a.triage_status || "new") === f.status))
+        && (!q || [a.ssid, a.bssid, a.detector, a.reasons].join(" ").toLowerCase().includes(q)));
+      const kind = (a) => (a.detector === "deauth" ? '<span class="tag triage-confirmed">deauth attack</span>'
+        : a.detector === "flood" ? '<span class="tag triage-confirmed">beacon flood</span>' : "");
+      const nPicked = state.picked.size;
+      el.innerHTML = `<div class="filters">
+          <select class="input" data-f="level" aria-label="Level"><option value="all">All levels</option><option ${f.level === "HIGH" ? "selected" : ""}>HIGH</option><option ${f.level === "MEDIUM" ? "selected" : ""}>MEDIUM</option></select>
+          <select class="input" data-f="status" aria-label="Status">${[["open", "Open"], ["all", "All"], ["new", "New"], ["investigating", "Investigating"], ["confirmed", "Confirmed"], ["dismissed", "Dismissed or muted"]].map(([v, t]) => `<option value="${v}" ${f.status === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+          <input class="input" data-f="q" type="search" placeholder="Filter…" value="${esc(f.q)}" aria-label="Filter alerts">
+        </div>
+        ${nPicked ? `<div class="bulk"><b>${nPicked} selected</b>${TRIAGE.map(([k, n]) => `<button class="btn small" data-bulk="${k}">${esc(n)}</button>`).join("")}<button class="btn small" data-bulk-clear>Clear</button></div>` : ""}
+        ${shown.length ? shown.map((a) => `<div class="item-row">
+          <input type="checkbox" data-pick="${a.id}" ${state.picked.has(a.id) ? "checked" : ""} aria-label="Select alert ${esc(a.ssid)} ${esc(a.bssid)}">
+          <button class="item ${isSel(a) ? "selected" : ""} ${a.triage_status === "false_positive" || a.muted ? "dismissed" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
           ${lvl(a.level)}<span class="who">${esc(ssidLabel(a.ssid))}</span><span class="score">${fmt(a.score, 0)}</span>
-          <span class="sub"><span class="mono">${esc(a.bssid)}</span>· first ${rel(a.first_ts)} ${triageTag(a.triage_status)}</span>
-        </button>`).join("");
+          <span class="sub"><span class="mono">${esc(a.bssid)}</span>· first ${rel(a.first_ts)} ${kind(a)} ${triageTag(a.triage_status)} ${a.muted ? '<span class="tag">muted</span>' : ""}</span>
+        </button></div>`).join("") : '<div class="empty">No alert matches these filters.</div>'}`;
     } else if (state.tab === "networks") {
       el.innerHTML = state.networks.length ? state.networks.map((n) => {
         const hot = n.aps.some((a) => a.alert_id);
@@ -305,10 +340,50 @@
         </button>`).join("") : '<div class="empty">No network name is shared between access points.</div>';
     }
   }
-  $("side-list").addEventListener("click", (e) => {
+  $("side-list").addEventListener("click", async (e) => {
+    const bulk = e.target.closest("[data-bulk]");
+    if (bulk) {
+      const r = await post("/api/alerts/triage_bulk", { ids: [...state.picked], status: bulk.dataset.bulk });
+      notice(r.ok ? `Updated ${r.data.updated.length} alert${r.data.updated.length === 1 ? "" : "s"}.` : (r.data && r.data.error) || "Could not update", r.ok ? "ok" : "error");
+      state.picked.clear();
+      refresh(true, true);
+      return;
+    }
+    if (e.target.closest("[data-bulk-clear]")) { state.picked.clear(); renderSide(); return; }
     const b = e.target.closest("[data-bssid]");
     if (b) select(b.dataset.ssid, b.dataset.bssid, true);
   });
+  $("side-list").addEventListener("change", (e) => {
+    const id = e.target.dataset.pick;
+    if (id) { e.target.checked ? state.picked.add(Number(id)) : state.picked.delete(Number(id)); renderSide(); return; }
+    const f = e.target.dataset.f;
+    if (f && f !== "q") { state.alertFilter[f] = e.target.value; renderSide(); }
+  });
+  $("side-list").addEventListener("input", (e) => {
+    if (e.target.dataset.f !== "q") return;
+    state.alertFilter.q = e.target.value;
+    const pos = e.target.selectionStart;
+    renderSide();
+    const box = $("side-list").querySelector('[data-f="q"]');
+    if (box) { box.focus(); box.setSelectionRange(pos, pos); }
+  });
+
+  // ------------------------------------------------------------------ F020 incident story
+  function renderIncident() {
+    const el = $("incident");
+    const open = state.incidents || [];
+    if (!open.length) { el.hidden = true; return; }
+    const inc = open[0];
+    const byId = new Map(state.ghost.map((a) => [a.id, a]));
+    el.hidden = false;
+    el.className = "card incident " + inc.level;
+    el.innerHTML = `<div class="card-head"><h2>${lvl(inc.level)} ${esc(inc.summary)}</h2>
+        <span class="muted">${rel(inc.first_ts)} – ${rel(inc.last_ts)}${open.length > 1 ? ` · ${open.length - 1} more incident${open.length > 2 ? "s" : ""}` : ""}</span></div>
+      <ol class="story">${inc.story.map((st) => {
+        const a = byId.get(st.alert_id);
+        return `<li><span class="t">${rel(st.ts)}</span>${a ? `<button class="linkish" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">${esc(st.text)}</button>` : esc(st.text)}</li>`;
+      }).join("")}</ol>`;
+  }
   function setTab(tab) {
     state.tab = tab;
     document.querySelectorAll(".tab").forEach((t) => {
@@ -508,6 +583,7 @@
             <span class="row-actions" style="margin-left:auto">
               ${ap.ssid !== "<hidden>" ? `<button class="btn small" data-accept-baseline title="It is ours: add it to ${esc(ap.ssid)}'s saved baseline so it stops alerting">Accept into baseline</button>` : ""}
               ${ap.allowlisted ? "" : '<button class="btn small" data-trust title="Add to the allow-list: not treated as new, but cloning it is still detected">Trust this AP</button>'}
+              <select class="input small-select" data-mute aria-label="Mute this access point"><option value="">Mute…</option><option value="1">for 1 hour</option><option value="8">for 8 hours</option><option value="24">for 24 hours</option><option value="168">for a week</option></select>
               <button class="btn small" data-export title="Download a Markdown write-up of this access point (for your report or notes)">Export report</button></span></div>
           <div class="why ${esc(level || "")}"><b>${esc(whatIs)}</b>
             ${hits.length ? `<span class="muted">${alert ? "At its peak (" + rel(alert.peak_ts) + ") the main reasons were:" : "What raised the score:"}</span><ul>${whyList}</ul>`
@@ -544,6 +620,7 @@
             <textarea id="triage-note" placeholder="Notes: who checked it, what you found…" maxlength="2000">${esc(alert.triage_note || "")}</textarea>
             <div class="triage-row"><button class="btn primary" id="triage-save">Save</button>
               <span class="saved" id="triage-saved">${alert.triage_ts ? "Last saved " + new Date(alert.triage_ts * 1000).toLocaleTimeString() : ""}</span></div>
+            <div id="triage-history" class="history" aria-live="polite"></div>
           </div>
         </div>
         <div>
@@ -556,6 +633,18 @@
     }
     $("detail").innerHTML = html;
     drawApChart(d, alert);
+    if (alert) loadHistory(alert.id);
+  }
+
+  /** F027: every status change and note on this alert, newest first. */
+  async function loadHistory(id) {
+    let rows = [];
+    try { rows = await get(`/api/alerts/${id}/history`); } catch (e) { return; }
+    const el = $("triage-history");
+    if (!el || !rows.length) return;
+    const name = (k) => (TRIAGE.find((t) => t[0] === k) || [k, k])[1];
+    el.innerHTML = `<b>History</b><ul>${rows.map((r) => `<li><span class="muted">${new Date(r.ts * 1000).toLocaleString()} · ${esc(r.actor)}</span>
+      ${r.action === "triage.bulk" ? "bulk update to" : esc(name(r.detail.from || "new")) + " →"} <b>${esc(name(r.detail.to))}</b>${r.detail.note_changed ? " · note edited" : ""}</li>`).join("")}</ul>`;
   }
 
   function drawApChart(d, alert) {
@@ -614,7 +703,15 @@
       refresh(true, true);
     }
   });
-  $("detail").addEventListener("change", (e) => {
+  $("detail").addEventListener("change", async (e) => {
+    if (e.target.dataset && e.target.hasAttribute("data-mute") && e.target.value && state.detail) {
+      const hours = Number(e.target.value), ap = state.detail.ap;
+      const r = await post("/api/mutes", { kind: "bssid", value: ap.bssid, hours });
+      notice(r.ok ? `${ap.bssid} muted for ${hours < 24 ? hours + " h" : hours / 24 + " day" + (hours > 24 ? "s" : "")}. Unmute it on the System page.` : (r.data && r.data.error) || "Could not mute", r.ok ? "ok" : "error");
+      e.target.value = "";
+      if (r.ok) refresh(true, true);
+      return;
+    }
     const list = e.target.closest(".checklist");
     if (!list) return;
     const ids = [...list.querySelectorAll("input:checked")].map((i) => Number(i.dataset.i));
@@ -848,13 +945,15 @@
       // The heavy lists only change when the server's data version changes.
       if (force || summary.data_version !== state.version) {
         const [ghost, base, networks, series, events, aps] = await Promise.all([
-          get("/api/alerts?detector=ghostap"), get("/api/alerts?detector=baseline"),
+          get("/api/alerts?detector=ghostap,deauth,flood"), get("/api/alerts?detector=baseline"),
           get("/api/networks"), get("/api/timeline"), get("/api/events"), get("/api/aps"),
         ]);
         state.version = summary.data_version;
+        try { state.incidents = await get("/api/incidents"); } catch (e) { state.incidents = []; }
         notify(ghost);
         state.ghost = ghost; state.base = base; state.networks = networks; state.events = events; state.aps = aps; state.series = series;
         if (changed("side", [ghost, base, networks, state.tab])) renderSide();
+        if (changed("incident", state.incidents)) renderIncident();
         if (changed("timeline", [series, events, summary.capture_end])) renderTimeline();
         if (changed("events", events)) renderEvents();
         if (changed("aps", aps)) renderTable();
