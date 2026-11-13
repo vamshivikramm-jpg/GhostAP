@@ -1236,6 +1236,28 @@
       <p><span class="mono">${esc(a.bssid)}</span> · risk ${fmt(a.score, 0)}</p>`;
     $("toasts").appendChild(t);
     setTimeout(() => t.remove(), 9000);
+    desktopNotify(a, isNew);
+  }
+
+  // ------------------------------------------------------------------ F055 desktop notifications
+  // Only while this tab is in the background, only after the user switched them on (which
+  // asks the browser for permission), and never with more than the network name and score.
+  const desktopNotifyOn = () => store.get("ghostap-desktop-notify") === "1" && "Notification" in window && Notification.permission === "granted";
+  function desktopNotify(a, isNew) {
+    if (!desktopNotifyOn() || !document.hidden) return;
+    try {
+      const n = new Notification(`GhostAP: ${a.level} ${isNew ? "alert" : "escalated"}`, {
+        body: `${a.ssid} · ${a.bssid} · risk ${fmt(a.score, 0)}`, tag: "ghostap-" + a.id, icon: "/static/icons/ghostap-192.png" });
+      n.onclick = () => { window.focus(); select(a.ssid, a.bssid, true); n.close(); };
+    } catch (e) { /* some browsers only allow notifications from a service worker */ }
+  }
+  async function toggleDesktopNotify() {
+    if (desktopNotifyOn()) { store.set("ghostap-desktop-notify", "0"); notice("Desktop notifications off.", "ok"); return; }
+    if (!("Notification" in window)) { notice("This browser does not support desktop notifications.", "error"); return; }
+    const p = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+    if (p !== "granted") { notice("The browser did not allow notifications. Change it in the site settings (lock icon in the address bar).", "error"); return; }
+    store.set("ghostap-desktop-notify", "1");
+    notice("Desktop notifications on: you get one when a new alert appears while this tab is in the background.", "ok");
   }
   document.addEventListener("click", (e) => {
     const b = e.target.closest("[data-inspect]");
@@ -1469,6 +1491,7 @@
     openHelp: () => openHelp(), openLayout: () => { applyLayout(); $("layout-dlg").showModal(); },
     toggleClock: () => $("clock-btn").click(), toggleTheme: () => $("theme-btn").click(),
     exportCsv: () => $("export-csv").click(), tableRows: () => tableRows(),
+    desktopNotifyOn: () => desktopNotifyOn(), toggleDesktopNotify: () => toggleDesktopNotify(),
     setTab: (t) => setTab(t), viewLink: () => viewLink(), markAllSeen: () => { markSeen(state.ghost, true); renderSide(); },
     setRange: (r) => { const b = document.querySelector(`[data-range="${r}"]`); if (b) b.click(); },
     currentView: () => currentView,

@@ -63,7 +63,7 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F010 | Passive hidden-network matching | B | done |
 | F011 | Per-network sensitivity | B | done |
 | F012 | Incident correlation | B | done |
-| F013 | Alert throttling and re-alerting | E | todo (moved: throttling belongs with notifications) |
+| F013 | Alert throttling and re-alerting | E | done |
 | F014 | Saved network baselines | A | done |
 | F015 | Monitored Networks page | C | done |
 | F016 | Baseline wizard | C | done |
@@ -105,13 +105,13 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F052 | Session incident report | G | todo |
 | F053 | Keep report numbers in sync | G | todo |
 | F054 | Session bundle | G | todo |
-| F055 | Desktop notifications | E | todo |
-| F056 | Webhooks | E | todo |
-| F057 | Phone push | E | todo |
-| F058 | Email alerts | E | todo |
-| F059 | SIEM and syslog export | E | todo |
-| F060 | Grafana metrics | E | todo |
-| F061 | Documented API with keys | E | todo |
+| F055 | Desktop notifications | E | done |
+| F056 | Webhooks | E | done* (tested against a local HTTP receiver) |
+| F057 | Phone push | E | done* (ntfy / Telegram formats tested locally; real delivery needs your topic or bot token) |
+| F058 | Email alerts | E | done* (tested with a fake SMTP server; real delivery needs your SMTP account) |
+| F059 | SIEM and syslog export | E | done |
+| F060 | Grafana metrics | E | done |
+| F061 | Documented API with keys | E | done |
 | F062 | Better sign-in page | F | todo |
 | F063 | Read-only viewer link | F | todo |
 | F064 | HTTPS mode | F | todo |

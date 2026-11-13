@@ -38,7 +38,7 @@ from .pipeline import Pipeline
 from .sessions import SessionError, SessionStore
 from .config import ConfigError, load_config
 from .storage import Store
-from . import vendors
+from . import apikeys, vendors
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 ATTACK_DETECTORS = "ghostap,deauth,flood"
@@ -138,6 +138,15 @@ def create_app(db: str, config: Optional[dict] = None,
         if local_only and not is_loopback(_request_hostname()):
             return Response("GhostAP only answers requests addressed to localhost.\n",
                             status=403, mimetype="text/plain")
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer " + apikeys.PREFIX):          # F061: scripts and tools
+            row = apikeys.check(ctx.admin_db, auth[7:].strip())
+            if row is None:
+                return jsonify({"error": "unknown or revoked API key"}), 401
+            if row["scope"] == "read" and request.method not in ("GET", "HEAD"):
+                return jsonify({"error": "this API key is read-only"}), 403
+            request.environ["ghostap.api_key"] = row
+            return None
         if token:
             if request.path == "/" and token_ok(request.args.get("token")):
                 resp = redirect("/", code=303)                 # drop the token from the URL bar
@@ -198,6 +207,9 @@ def create_app(db: str, config: Optional[dict] = None,
         return st
 
     def actor() -> str:
+        key = request.environ.get("ghostap.api_key") if request else None
+        if key:
+            return "key:" + key["name"]
         return "token" if token else "local"
 
     def json_body():
@@ -458,6 +470,8 @@ def create_app(db: str, config: Optional[dict] = None,
     web_tools.register(app, ctx)
     from . import web_demo
     web_demo.register(app, ctx)
+    from . import web_integrations
+    web_integrations.register(app, ctx)
 
     @app.get("/api/timeline")
     def timeline():

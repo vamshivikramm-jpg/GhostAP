@@ -55,7 +55,27 @@ DEFAULT_CONFIG: dict = {
         "flood_new_aps_per_minute": 30,    # F008: many new radios at once = beacon flood
         "use_example_signatures": False,   # enable the synthetic example tool signatures
     },
+    # F013, F055-F059: messages about alerts. Off until you configure a channel.
+    # Secrets are never stored here: give the NAME of an environment variable instead.
+    "notifications": {
+        "enabled": False,
+        "min_level": "MEDIUM",             # MEDIUM or HIGH
+        "realert_minutes": 30.0,           # F013: remind about an alert still active this long (0 = never)
+        "max_per_minute": 6,               # F013: per channel; extra messages are counted, not sent
+        "dashboard_url": "",               # link added to messages, e.g. http://kali.local:8050
+        "webhooks": [],                    # F056/F057: see config.yaml for the format
+        "email": {                         # F058
+            "enabled": False, "host": "", "port": 587, "starttls": True, "username": "",
+            "password_env": "GHOSTAP_SMTP_PASSWORD", "sender": "", "to": [],
+        },
+        "syslog": {"enabled": False, "host": "127.0.0.1", "port": 514, "protocol": "udp", "format": "json"},  # F059
+        "jsonl": {"enabled": False, "path": "data/alerts.jsonl"},                                            # F059
+    },
+    "api": {"metrics": True},              # F060: Prometheus /metrics endpoint
 }
+
+WEBHOOK_FORMATS = ("json", "ntfy", "telegram", "slack")
+_WEBHOOK_KEYS = {"name", "url", "url_env", "format", "secret_env", "chat_id", "min_level"}
 
 _LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
@@ -151,6 +171,36 @@ def validate(cfg: dict) -> dict:
     need(r["check_minutes"] > 0, "retention.check_minutes must be greater than 0")
     need(str(cfg["logging"]["level"]).upper() in _LEVELS,
          "logging.level must be one of " + ", ".join(_LEVELS))
+    n = cfg["notifications"]
+    need(n["min_level"] in ("MEDIUM", "HIGH"), "notifications.min_level must be MEDIUM or HIGH")
+    need(n["realert_minutes"] >= 0, "notifications.realert_minutes cannot be negative (0 = never)")
+    need(n["max_per_minute"] >= 1, "notifications.max_per_minute must be at least 1")
+    need(not n["dashboard_url"] or str(n["dashboard_url"]).startswith(("http://", "https://")),
+         "notifications.dashboard_url must start with http:// or https://")
+    for i, h in enumerate(n["webhooks"]):
+        where = "notifications.webhooks[{}]".format(i)
+        if not isinstance(h, dict):
+            errors.append(where + " must be a section with url (or url_env) and format")
+            continue
+        extra = set(h) - _WEBHOOK_KEYS
+        need(not extra, "{}: unknown setting(s) {}".format(where, ", ".join(sorted(extra))))
+        need(bool(h.get("url")) != bool(h.get("url_env")), where + " needs exactly one of url or url_env")
+        need(not h.get("url") or str(h["url"]).startswith(("http://", "https://")),
+             where + ".url must start with http:// or https://")
+        need(h.get("format", "json") in WEBHOOK_FORMATS,
+             "{}.format must be one of {}".format(where, ", ".join(WEBHOOK_FORMATS)))
+        need(h.get("format") != "telegram" or bool(h.get("chat_id")), where + ": telegram needs chat_id")
+        need(h.get("min_level", "MEDIUM") in ("MEDIUM", "HIGH"), where + ".min_level must be MEDIUM or HIGH")
+    e = n["email"]
+    if e["enabled"]:
+        need(bool(e["host"]) and bool(e["sender"]) and bool(e["to"]),
+             "notifications.email needs host, sender and at least one address in to")
+    need(1 <= e["port"] <= 65535, "notifications.email.port must be 1-65535")
+    sl = n["syslog"]
+    need(sl["protocol"] in ("udp", "tcp"), "notifications.syslog.protocol must be udp or tcp")
+    need(sl["format"] in ("json", "cef"), "notifications.syslog.format must be json or cef")
+    need(1 <= sl["port"] <= 65535, "notifications.syslog.port must be 1-65535")
+    need(not n["jsonl"]["enabled"] or bool(n["jsonl"]["path"]), "notifications.jsonl.path is empty")
     if errors:
         raise ConfigError("; ".join(errors))
     cfg["temporal"]["smoothing_steps"] = int(t["smoothing_steps"])

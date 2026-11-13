@@ -35,3 +35,50 @@ temporal:
 # allow-listed BSSID is still caught.
 known_bssids: []
 #  - a4:2b:b0:11:22:33
+
+# Alert messages (off by default; nothing is sent until you enable a channel).
+# Never write passwords or tokens here: give the NAME of an environment variable.
+notifications:
+  enabled: false
+  min_level: MEDIUM        # MEDIUM or HIGH
+  realert_minutes: 30      # remind about an alert still active this long (0 = never)
+  max_per_minute: 6        # per channel; extra messages are counted, not sent
+  dashboard_url: ""        # e.g. http://kali.local:8050 (adds a link to each message)
+  webhooks: []
+#   - name: lab-receiver           # plain JSON POST, optionally signed:
+#     url: http://127.0.0.1:9000/ghostap
+#     format: json
+#     secret_env: GHOSTAP_WEBHOOK_SECRET   # header X-GhostAP-Signature: sha256=<HMAC of the body>
+#   - name: phone                  # https://ntfy.sh: install the app, pick a hard-to-guess topic
+#     url_env: GHOSTAP_NTFY_URL    # export GHOSTAP_NTFY_URL=https://ntfy.sh/<your-topic>
+#     format: ntfy
+#     min_level: HIGH
+#   - name: telegram               # bot token stays in the environment variable
+#     url_env: GHOSTAP_TELEGRAM_URL   # https://api.telegram.org/bot<TOKEN>/sendMessage
+#     format: telegram
+#     chat_id: "123456789"
+#   - name: slack
+#     url_env: GHOSTAP_SLACK_URL
+#     format: slack
+  email:
+    enabled: false
+    host: ""               # e.g. smtp.gmail.com
+    port: 587
+    starttls: true
+    username: ""
+    password_env: GHOSTAP_SMTP_PASSWORD
+    sender: ""
+    to: []
+  syslog:                  # for a SIEM: RFC 5424 lines, JSON or ArcSight CEF
+    enabled: false
+    host: 127.0.0.1
+    port: 514
+    protocol: udp          # udp or tcp
+    format: json           # json or cef
+  jsonl:                   # one JSON object per alert message, appended to a file
+    enabled: false
+    path: data/alerts.jsonl
+
+# Prometheus / Grafana: GET /metrics (needs an API key when the dashboard is exposed).
+api:
+  metrics: true

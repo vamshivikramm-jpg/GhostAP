@@ -40,6 +40,35 @@ CREATE TABLE IF NOT EXISTS layouts (
     bssid       TEXT
 );
 
+-- F013 / F055-F059: what was sent about each alert, and a log of every attempt (admin db)
+CREATE TABLE IF NOT EXISTS notify_state (
+    session    TEXT    NOT NULL,
+    alert_id   INTEGER NOT NULL,
+    level      TEXT,
+    last_sent  REAL,
+    PRIMARY KEY (session, alert_id)
+);
+CREATE TABLE IF NOT EXISTS notify_log (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       REAL NOT NULL,
+    channel  TEXT NOT NULL,
+    event    TEXT NOT NULL,
+    target   TEXT,
+    ok       INTEGER NOT NULL,
+    detail   TEXT
+);
+-- F061: API keys (only a SHA-256 hash of each key is kept)
+CREATE TABLE IF NOT EXISTS api_keys (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    prefix     TEXT NOT NULL,
+    hash       TEXT NOT NULL UNIQUE,
+    scope      TEXT NOT NULL,         -- read | write
+    created    REAL NOT NULL,
+    last_used  REAL,
+    revoked    REAL
+);
+
 -- F037: analyst notes on the timeline ("plugged in the hotspot", "attack started")
 CREATE TABLE IF NOT EXISTS annotations (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,6 +246,50 @@ class Store:
         self._pending += 1
         if self._pending >= self.BATCH_SIZE:
             self.commit()
+
+    # ---- F013 notifications --------------------------------------------------- #
+    def notify_state(self, session: str) -> dict:
+        return {r["alert_id"]: dict(r) for r in self.conn.execute(
+            "SELECT * FROM notify_state WHERE session = ?", (session,))}
+
+    def set_notify_state(self, session: str, alert_id: int, level: str, last_sent: float) -> None:
+        self.conn.execute("INSERT OR REPLACE INTO notify_state VALUES (?, ?, ?, ?)",
+                          (session, alert_id, level, last_sent))
+        self.conn.commit()
+
+    def log_notification(self, ts: float, channel: str, event: str, target: str, ok: bool, detail: str) -> None:
+        self.conn.execute("INSERT INTO notify_log (ts, channel, event, target, ok, detail) VALUES (?, ?, ?, ?, ?, ?)",
+                          (ts, channel, event, target, int(ok), detail[:500]))
+        self.conn.execute("DELETE FROM notify_log WHERE id <= (SELECT MAX(id) FROM notify_log) - 2000")
+        self.conn.commit()
+
+    def notification_log(self, limit: int = 100) -> List[dict]:
+        return [dict(r) for r in self.conn.execute("SELECT * FROM notify_log ORDER BY id DESC LIMIT ?", (limit,))]
+
+    # ---- F061 API keys --------------------------------------------------------- #
+    def add_api_key(self, name: str, prefix: str, key_hash: str, scope: str, created: float) -> int:
+        cur = self.conn.execute("INSERT INTO api_keys (name, prefix, hash, scope, created) VALUES (?, ?, ?, ?, ?)",
+                                (name, prefix, key_hash, scope, created))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def api_key_by_hash(self, key_hash: str) -> Optional[dict]:
+        r = self.conn.execute("SELECT * FROM api_keys WHERE hash = ? AND revoked IS NULL", (key_hash,)).fetchone()
+        return dict(r) if r else None
+
+    def touch_api_key(self, key_id: int, ts: float) -> None:
+        self.conn.execute("UPDATE api_keys SET last_used = ? WHERE id = ?", (ts, key_id))
+        self.conn.commit()
+
+    def api_keys(self) -> List[dict]:
+        return [{k: r[k] for k in r.keys() if k != "hash"}
+                for r in self.conn.execute("SELECT * FROM api_keys ORDER BY id")]
+
+    def revoke_api_key(self, key_id: int, ts: float) -> bool:
+        n = self.conn.execute("UPDATE api_keys SET revoked = ? WHERE id = ? AND revoked IS NULL",
+                              (ts, key_id)).rowcount
+        self.conn.commit()
+        return n > 0
 
     # ---- F037 annotations ---------------------------------------------------- #
     def add_annotation(self, ts: float, text: str, actor: str, created: float) -> int:
