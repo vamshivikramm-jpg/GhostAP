@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GhostAP Dashboard</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3c-6 0-10 4.5-10 10.5V28l3.3-2.5L12.7 28 16 25.5 19.3 28l3.4-2.5L26 28V13.5C26 7.5 22 3 16 3z' fill='%232a78d6'/%3E%3Ccircle cx='12.5' cy='14' r='2' fill='white'/%3E%3Ccircle cx='19.5' cy='14' r='2' fill='white'/%3E%3C/svg%3E">
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#1f6bc6">
+  <meta name="application-name" content="GhostAP">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/vendor/plotly.min.js"></script>
 </head>
@@ -16,7 +20,7 @@
       <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c-6 0-10 4.5-10 10.5V28l3.3-2.5L12.7 28 16 25.5 19.3 28l3.4-2.5L26 28V13.5C26 7.5 22 3 16 3z"/><circle cx="12.5" cy="14" r="2"/><circle cx="19.5" cy="14" r="2"/></svg>
       <div>
         <h1>GhostAP</h1>
-        <span class="tagline">Passive Evil Twin detector</span>
+        <span class="tagline" data-i18n="tagline">Passive Evil Twin detector</span>
       </div>
     </div>
     <nav class="nav" id="nav" aria-label="Pages"></nav>
@@ -24,7 +28,10 @@
     <div class="top-actions">
       <button class="icon-btn" id="help-btn" title="How GhostAP works (?)" aria-label="How GhostAP works">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5"/><path d="M9.5 9.3a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.2-2.5 3.8"/><circle cx="12" cy="17.2" r=".6" class="fill"/></svg>
-        <span>How it works</span>
+        <span data-i18n="btn.how">How it works</span>
+      </button>
+      <button class="icon-btn" data-palette title="All commands (Ctrl+K / ⌘K)" aria-label="Open the command palette" aria-keyshortcuts="Control+K Meta+K">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
       </button>
       <button class="icon-btn" data-present title="Presentation mode: large, narrated dashboard for a demo" aria-label="Presentation mode">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M12 16v4M8 20h8"/></svg>
@@ -56,11 +63,11 @@
     </section>
 
     <section class="tiles" aria-label="Summary" data-panel="tiles">
-      <button class="tile" data-go="networks"><span class="tile-label">Networks</span><span class="tile-value" id="t-networks">–</span><span class="tile-sub">distinct names (SSIDs)</span></button>
-      <button class="tile" data-go="table"><span class="tile-label">Access points</span><span class="tile-value" id="t-aps">–</span><span class="tile-sub" id="t-frames">– beacons heard</span></button>
-      <button class="tile tile-high" data-go="alerts"><span class="tile-label"><i class="lvl-icon HIGH"></i>HIGH alerts</span><span class="tile-value" id="t-high">–</span><span class="tile-sub">likely evil twins</span></button>
-      <button class="tile tile-med" data-go="alerts"><span class="tile-label"><i class="lvl-icon MEDIUM"></i>MEDIUM alerts</span><span class="tile-value" id="t-medium">–</span><span class="tile-sub">suspicious, check them</span></button>
-      <button class="tile" data-go="baseline"><span class="tile-label">Name-only check</span><span class="tile-value" id="t-base">–</span><span class="tile-sub">would have alarmed</span></button>
+      <button class="tile" data-go="networks"><span class="tile-label"><span data-i18n="tile.networks">Networks</span></span><span class="tile-value" id="t-networks">–</span><span class="tile-sub">distinct names (SSIDs)</span></button>
+      <button class="tile" data-go="table"><span class="tile-label"><span data-i18n="tile.aps">Access points</span></span><span class="tile-value" id="t-aps">–</span><span class="tile-sub" id="t-frames">– beacons heard</span></button>
+      <button class="tile tile-high" data-go="alerts"><span class="tile-label"><i class="lvl-icon HIGH"></i><span data-i18n="tile.high">HIGH alerts</span></span><span class="tile-value" id="t-high">–</span><span class="tile-sub">likely evil twins</span></button>
+      <button class="tile tile-med" data-go="alerts"><span class="tile-label"><i class="lvl-icon MEDIUM"></i><span data-i18n="tile.medium">MEDIUM alerts</span></span><span class="tile-value" id="t-medium">–</span><span class="tile-sub">suspicious, check them</span></button>
+      <button class="tile" data-go="baseline"><span class="tile-label"><span data-i18n="tile.nameonly">Name-only check</span></span><span class="tile-value" id="t-base">–</span><span class="tile-sub">would have alarmed</span></button>
     </section>
 
     <div class="since" id="since" hidden aria-live="polite" data-panel="since"></div>
@@ -69,13 +76,13 @@
     <section class="grid" data-panel="main">
       <div class="card side">
         <div class="tabs" role="tablist" aria-label="Lists">
-          <button role="tab" class="tab active" id="tab-alerts" data-tab="alerts" aria-selected="true">Alerts <span class="count" id="c-alerts"></span></button>
-          <button role="tab" class="tab" id="tab-networks" data-tab="networks" aria-selected="false">Networks <span class="count" id="c-networks"></span></button>
-          <button role="tab" class="tab" id="tab-baseline" data-tab="baseline" aria-selected="false">Name-only <span class="count" id="c-baseline"></span></button>
+          <button role="tab" class="tab active" id="tab-alerts" data-tab="alerts" aria-selected="true"><span data-i18n="tab.alerts">Alerts</span> <span class="count" id="c-alerts"></span></button>
+          <button role="tab" class="tab" id="tab-networks" data-tab="networks" aria-selected="false"><span data-i18n="tab.networks">Networks</span> <span class="count" id="c-networks"></span></button>
+          <button role="tab" class="tab" id="tab-baseline" data-tab="baseline" aria-selected="false"><span data-i18n="tab.baseline">Name-only</span> <span class="count" id="c-baseline"></span></button>
         </div>
         <p class="hint" id="side-hint"></p>
         <div class="side-list" id="side-list" role="tabpanel"></div>
-        <p class="kbd-hint">Tip: <kbd>j</kbd>/<kbd>k</kbd> move through the list, <kbd>/</kbd> searches access points, <kbd>?</kbd> opens help.</p>
+        <p class="kbd-hint">Tip: <kbd>j</kbd>/<kbd>k</kbd> move through the list, <kbd>/</kbd> searches access points, <kbd>?</kbd> opens help, <kbd>Ctrl</kbd>+<kbd>K</kbd> lists every command.</p>
       </div>
 
       <article class="card detail" id="detail" tabindex="-1" aria-live="polite">
@@ -89,7 +96,7 @@
 
     <section class="card" id="timeline-card" data-panel="timeline">
       <div class="card-head">
-        <h2>Risk over time <span class="muted">smoothed score of every access point</span></h2>
+        <h2><span data-i18n="card.timeline">Risk over time</span> <span class="muted">smoothed score of every access point</span></h2>
         <div class="controls">
           <div class="seg" role="group" aria-label="Score type">
             <button class="seg-btn active" data-score="score" aria-pressed="true">Smoothed</button>
@@ -115,7 +122,7 @@
       </form>
       <ul class="notes" id="notes" aria-label="Notes on the timeline"></ul>
       <div class="events-head">
-        <h3>Events</h3>
+        <h3 data-i18n="card.events">Events</h3>
         <div class="chips" role="group" aria-label="Event filter">
           <button class="chip active" data-ev="all">All</button>
           <button class="chip" data-ev="alerts">Alerts</button>
@@ -128,7 +135,7 @@
 
     <section class="card" id="table-card" data-panel="table">
       <div class="card-head">
-        <h2>All access points</h2>
+        <h2 data-i18n="card.table">All access points</h2>
         <div class="controls">
           <input type="search" id="ap-search" placeholder="Search name, BSSID, vendor, security…  ( / )" aria-label="Search access points">
           <details class="menu"><summary class="btn small">Columns</summary><div class="menu-body" id="col-list"></div></details>
@@ -158,11 +165,11 @@
     </div>
   </main>
 
-  <footer>Passive monitoring only: GhostAP listens to beacon and probe-response frames and never transmits. Use it only on networks you own or are authorised to monitor.</footer>
+  <footer data-i18n="footer">Passive monitoring only: GhostAP listens to beacon and probe-response frames and never transmits. Use it only on networks you own or are authorised to monitor.</footer>
 
   <dialog id="help" aria-labelledby="help-title">
     <form method="dialog" class="dialog-close"><button aria-label="Close">✕</button></form>
-    <h2 id="help-title">How GhostAP works</h2>
+    <h2 id="help-title" data-i18n="help.title">How GhostAP works</h2>
     <ol class="steps">
       <li><b>Listen.</b> Every Wi-Fi access point announces itself about ten times a second with a <i>beacon</i>: its name, its radio address (BSSID), channel, security, and how it is built. GhostAP only listens; it never sends anything.</li>
       <li><b>Learn normal.</b> For the first <span id="help-baseline">2</span> minutes GhostAP learns what each network normally looks like: which access points it has, their vendors, channels, security, signal and uptime.</li>
@@ -170,6 +177,7 @@
       <li><b>Score and smooth.</b> The indicators are combined into a weighted risk score from 0 to 100, averaged over the last 30 seconds so that one odd frame cannot raise an alarm. <span class="lvl"><i class="lvl-icon MEDIUM"></i>MEDIUM</span> from <span id="help-med">30</span>, <span class="lvl"><i class="lvl-icon HIGH"></i>HIGH</span> from <span id="help-high">60</span>.</li>
     </ol>
     <div class="row-actions demo-row">
+      <button class="btn" data-tour="start">Take the guided tour</button>
       <button class="btn primary" data-demo-present title="Replays the synthetic test capture as a new session and narrates it">Run the demo and present it</button>
       <button class="btn" data-demo>Run the demo</button>
       <span class="muted">Synthetic test capture: a twin of “MVSR_WiFi” appears after three minutes (about 18 seconds at ×10). Not available during a live capture.</span>
@@ -182,18 +190,32 @@
 
   <dialog id="layout-dlg" aria-labelledby="layout-title">
     <form method="dialog" class="dialog-close"><button aria-label="Close">✕</button></form>
-    <h2 id="layout-title">Customise the dashboard</h2>
-    <p class="muted">Show, hide and reorder the panels. Saved in this browser only.</p>
+    <h2 id="layout-title" data-i18n="layout.title">Customise the dashboard</h2>
+    <p class="muted">Saved in this browser only.</p>
+    <div class="appearance">
+      <fieldset><legend>Colours</legend>
+        <label class="check"><input type="radio" name="palette" value="standard"> Standard</label>
+        <label class="check"><input type="radio" name="palette" value="cb"> Colour-blind safe</label></fieldset>
+      <fieldset><legend>Language</legend><select class="input" id="lang-select" aria-label="Language"></select>
+        <span class="muted small">Hindi and Telugu cover the main screen only and are draft translations.</span></fieldset>
+      <fieldset><legend>Contrast</legend>
+        <label class="check"><input type="radio" name="contrast" value="normal"> Standard</label>
+        <label class="check"><input type="radio" name="contrast" value="more"> High contrast</label></fieldset>
+    </div>
+    <h3>Panels</h3>
+    <p class="muted">Show, hide and reorder them.</p>
     <ul class="layout-list" id="layout-list"></ul>
     <button class="btn" id="layout-reset">Reset to default</button>
   </dialog>
 
   <div class="toasts" id="toasts" aria-live="assertive"></div>
+  <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
   <script src="/static/views/monitored.js"></script>
   <script src="/static/views/sessions.js"></script>
   <script src="/static/views/system.js"></script>
   <script src="/static/views/whatif.js"></script>
   <script src="/static/present.js"></script>
+  <script src="/static/ux.js"></script>
 </body>
 </html>

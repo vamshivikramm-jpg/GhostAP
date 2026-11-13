@@ -80,6 +80,8 @@
 
   // ------------------------------------------------------------------ helpers
   const $ = (id) => document.getElementById(id);
+  /** F082: translated text when the chosen language has it, else the English given here. */
+  const T = (key, english, vars) => (window.GA_I18N ? window.GA_I18N.t(key, english, vars) : english);
   const esc = (v) => String(v == null ? "" : v)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -247,37 +249,37 @@
     let cls, title, sub, actions = "";
     prog.hidden = true;
     if (st.state === "error") {
-      cls = "error"; title = "Live capture could not start"; sub = st.message;
+      cls = "error"; title = T("verdict.error", "Live capture could not start"); sub = st.message;
     } else if (s.capture_start == null) {
-      cls = "learning"; title = "Waiting for Wi-Fi beacons…";
+      cls = "learning"; title = T("verdict.waiting", "Waiting for Wi-Fi beacons…");
       sub = "Nothing has been heard yet. Live capture needs a monitor-mode adapter on Linux.";
     } else if (!s.baseline_complete) {
       const done = Math.max(0, s.capture_end - s.capture_start);
-      cls = "learning"; title = "Learning what normal looks like";
+      cls = "learning"; title = T("verdict.learning", "Learning what normal looks like");
       sub = `${Math.round(done)} of ${Math.round(s.baseline_seconds)} s. GhostAP first watches every network so it can spot what changes later. ${s.aps} access points heard so far.`;
       prog.hidden = false;
       prog.firstElementChild.style.width = Math.min(100, (100 * done) / s.baseline_seconds) + "%";
     } else if (s.top_alert && s.top_alert.detector === "deauth") {
       const a = s.top_alert;
-      cls = a.level === "HIGH" ? "high" : "medium"; title = `Deauthentication attack on “${a.ssid}”`;
+      cls = a.level === "HIGH" ? "high" : "medium"; title = T("verdict.deauth", `Deauthentication attack on “${a.ssid}”`, { ssid: a.ssid });
       sub = `Bursts of frames are disconnecting clients from ${a.bssid}. Attackers do this to push phones onto an evil twin; watch for a new access point using this name.`;
-      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">Inspect</button>`;
+      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">${esc(T("btn.inspect", "Inspect"))}</button>`;
     } else if (s.top_alert && s.top_alert.detector === "flood") {
-      cls = "high"; title = "Beacon flood: many fake networks appeared at once";
+      cls = "high"; title = T("verdict.flood", "Beacon flood: many fake networks appeared at once");
       sub = "A large number of new radios appeared within a minute, which is typical of fake-AP generators.";
     } else if (s.top_alert && s.top_alert.level === "HIGH") {
       const a = s.top_alert, why = topReasonNames(a.reasons).slice(0, 3);
-      cls = "high"; title = `Evil twin suspected on “${a.ssid}”`;
+      cls = "high"; title = T("verdict.twin", `Evil twin suspected on “${a.ssid}”`, { ssid: a.ssid });
       sub = `Access point ${a.bssid} scores ${fmt(a.score, 0)}/100${why.length ? ": " + why.join(", ") : ""}.` +
         (s.alerts.HIGH + s.alerts.MEDIUM > 1 ? ` ${s.alerts.HIGH + s.alerts.MEDIUM} alerts in total.` : "");
-      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">Inspect</button>`;
+      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">${esc(T("btn.inspect", "Inspect"))}</button>`;
     } else if (s.top_alert) {
       const a = s.top_alert, why = topReasonNames(a.reasons).slice(0, 2);
-      cls = "medium"; title = `Suspicious access point on “${a.ssid}”`;
+      cls = "medium"; title = T("verdict.suspicious", `Suspicious access point on “${a.ssid}”`, { ssid: a.ssid });
       sub = `${a.bssid} scores ${fmt(a.score, 0)}/100${why.length ? " (" + why.join(", ") + ")" : ""}. Worth a look.`;
-      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">Inspect</button>`;
+      actions = `<button class="btn primary" data-inspect="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">${esc(T("btn.inspect", "Inspect"))}</button>`;
     } else {
-      cls = "ok"; title = `All clear: ${s.aps} access point${s.aps === 1 ? "" : "s"} on ${s.networks} network${s.networks === 1 ? "" : "s"} look normal`;
+      cls = "ok"; title = T("verdict.clear", `All clear: ${s.aps} access point${s.aps === 1 ? "" : "s"} on ${s.networks} network${s.networks === 1 ? "" : "s"} look normal`, { aps: s.aps, nets: s.networks });
       sub = (s.dismissed_alerts ? `${s.dismissed_alerts} alert${s.dismissed_alerts === 1 ? " was" : "s were"} marked as false positive by an analyst. ` : "") +
         (s.muted_alerts ? `${s.muted_alerts} muted. ` : "") +
         (s.baseline_alerts
@@ -528,7 +530,7 @@
       <thead><tr><th></th><th class="me"><span class="colhead">This access point<small class="mono">${esc(ap.bssid)}</small></span></th>
       ${cols.map((x) => `<th><span class="colhead">${x.in_baseline ? "Known AP" : "Other new AP"}<small class="mono">${esc(x.bssid)}</small></span></th>`).join("")}</tr></thead>
       <tbody>${body}</tbody></table></div>
-      <p class="cmp-legend"><b style="color:var(--critical)">≠</b> differs from every access point known for “${esc(ssidLabel(ap.ssid))}” · <b style="color:var(--good)">=</b> matches${more > 0 ? ` · ${more} more access point${more > 1 ? "s" : ""} not shown` : ""}</p>`;
+      <p class="cmp-legend"><b style="color:var(--critical-ink)">≠</b> differs from every access point known for “${esc(ssidLabel(ap.ssid))}” · <b style="color:var(--good)">=</b> matches${more > 0 ? ` · ${more} more access point${more > 1 ? "s" : ""} not shown` : ""}</p>`;
   }
 
   // ------------------------------------------------------------------ export
@@ -619,6 +621,7 @@
               ${ap.allowlisted ? "" : '<button class="btn small" data-trust title="Add to the allow-list: not treated as new, but cloning it is still detected">Trust this AP</button>'}
               <select class="input small-select" data-mute aria-label="Mute this access point"><option value="">Mute…</option><option value="1">for 1 hour</option><option value="8">for 8 hours</option><option value="24">for 24 hours</option><option value="168">for a week</option></select>
               <button class="btn small" data-export title="Download a Markdown write-up of this access point (for your report or notes)">Export report</button>
+              <button class="btn small" data-copy-link title="Copy a link that opens this access point with the current tab, filters and time range">Copy link</button>
               <a class="btn small" data-evidence href="${esc(withSession(`/api/ap/evidence.pcap?ssid=${encodeURIComponent(ap.ssid)}&bssid=${encodeURIComponent(ap.bssid)}`))}" download title="Download this access point's beacons around the alert as a pcap (open in Wireshark)">Evidence pcap</a></span></div>
           <div class="why ${esc(level || "")}"><b>${esc(whatIs)}</b>
             ${hits.length ? `<span class="muted">${alert ? "At its peak (" + rel(alert.peak_ts) + ") the main reasons were:" : "What raised the score:"}</span><ul>${whyList}</ul>`
@@ -665,7 +668,7 @@
             <div class="seg seg-grid" role="group" aria-label="Alert status">
               ${TRIAGE.map(([k, n]) => `<button class="seg-btn ${alert.triage_status === k || (!alert.triage_status && k === "new") ? "active" : ""}" data-triage="${k}" aria-pressed="${alert.triage_status === k}">${esc(n)}</button>`).join("")}
             </div>
-            <textarea id="triage-note" placeholder="Notes: who checked it, what you found…" maxlength="2000">${esc(alert.triage_note || "")}</textarea>
+            <textarea id="triage-note" aria-label="Triage notes" placeholder="Notes: who checked it, what you found…" maxlength="2000">${esc(alert.triage_note || "")}</textarea>
             <div class="triage-row"><button class="btn primary" id="triage-save">Save</button>
               <span class="saved" id="triage-saved">${alert.triage_ts ? "Last saved " + new Date(alert.triage_ts * 1000).toLocaleTimeString() : ""}</span></div>
             <div id="triage-history" class="history" aria-live="polite"></div>
@@ -968,6 +971,23 @@
     store.set("ghostap-layout", JSON.stringify(l));
     applyLayout();
     if (e.target.checked && k === "timeline") renderTimeline();
+  });
+  // F080 colour-blind safe palette and high contrast
+  function applyAppearance() {
+    const palette = store.get("ghostap-palette") || "standard";
+    const contrast = store.get("ghostap-contrast") || (window.matchMedia("(prefers-contrast: more)").matches ? "more" : "normal");
+    const root = document.documentElement;
+    if (palette === "cb") root.setAttribute("data-palette", "cb"); else root.removeAttribute("data-palette");
+    root.setAttribute("data-contrast", contrast);
+    document.querySelectorAll('input[name="palette"]').forEach((i) => { i.checked = i.value === palette; });
+    document.querySelectorAll('input[name="contrast"]').forEach((i) => { i.checked = i.value === contrast; });
+  }
+  $("layout-dlg").addEventListener("change", (e) => {
+    if (e.target.name !== "palette" && e.target.name !== "contrast") return;
+    store.set("ghostap-" + e.target.name, e.target.value);
+    applyAppearance();
+    rethemeCharts();
+    renderTable();
   });
   $("layout-reset").addEventListener("click", () => { store.del("ghostap-layout"); applyLayout(); renderTimeline(); });
   $("layout-btn").addEventListener("click", () => { applyLayout(); $("layout-dlg").showModal(); });
@@ -1312,8 +1332,8 @@
         if (state.sel) loadDetail();
       }
       if (!state.sel) {
-        const m = /^#ap=([^|]*)\|(.+)$/.exec(location.hash);
-        if (m) select(decodeURIComponent(m[1]), decodeURIComponent(m[2]), false);
+        const v = readViewHash();
+        if (v && v.ap) select(v.ap[0], v.ap[1], false);
         else if (state.ghost.length) select(state.ghost[0].ssid, state.ghost[0].bssid, false);
       }
       if (!once) schedule(summary.status && summary.status.state === "running" ? 2000 : 10000);
@@ -1342,14 +1362,61 @@
   // Other pages live in static/views/*.js and register themselves in GA.views.
   const views = {};
   let currentView = "dashboard";
+  /** F083: "#ap=<ssid>|<bssid>&tab=…&range=…&clock=1&lvl=…&st=…&q=…&s=<session>" (each value
+   *  URI-encoded; "|" separates the encoded SSID and BSSID). */
+  function readViewHash() {
+    const h = location.hash.replace(/^#/, "");
+    if (!/^(ap|tab|range|s)=/.test(h)) return null;
+    const out = {};
+    h.split("&").forEach((part) => {
+      const i = part.indexOf("=");
+      if (i < 1) return;
+      const k = part.slice(0, i), raw = part.slice(i + 1);
+      try {
+        if (k === "ap") { const j = raw.indexOf("|"); if (j > 0) out.ap = [decodeURIComponent(raw.slice(0, j)), decodeURIComponent(raw.slice(j + 1))]; }
+        else out[k] = decodeURIComponent(raw);
+      } catch (e) { /* malformed part: ignore it */ }
+    });
+    return out;
+  }
+  function viewLink() {
+    const enc = encodeURIComponent, p = [];
+    if (state.sel) p.push("ap=" + enc(state.sel.ssid) + "|" + enc(state.sel.bssid));
+    if (state.tab !== "alerts") p.push("tab=" + enc(state.tab));
+    if (state.range !== "all") p.push("range=" + enc(state.range));
+    if (state.clock) p.push("clock=1");
+    const f = state.alertFilter;
+    if (f.level !== "all") p.push("lvl=" + enc(f.level));
+    if (f.status !== "open") p.push("st=" + enc(f.status));
+    if (f.q) p.push("q=" + enc(f.q));
+    if (state.session) p.push("s=" + enc(state.session));
+    return location.origin + location.pathname + (p.length ? "#" + p.join("&") : "");
+  }
+  /** Apply a shared link's settings once, before the first refresh. */
+  function applyViewHash() {
+    const v = readViewHash();
+    if (!v) return;
+    if (v.s && v.s !== state.session) { state.session = v.s; state.sessionName = v.s; }
+    if (["alerts", "networks", "baseline"].includes(v.tab)) state.tab = v.tab;
+    if (["5m", "15m", "1h", "all"].includes(v.range)) {
+      state.range = v.range;
+      document.querySelectorAll("[data-range]").forEach((x) => { x.classList.toggle("active", x.dataset.range === v.range); x.setAttribute("aria-pressed", x.dataset.range === v.range); });
+    }
+    if (v.clock === "1") state.clock = true;              // this tab only; not saved
+    if (["HIGH", "MEDIUM"].includes(v.lvl)) state.alertFilter.level = v.lvl;
+    if (["open", "all", "new", "investigating", "confirmed", "dismissed"].includes(v.st)) state.alertFilter.status = v.st;
+    if (v.q) state.alertFilter.q = v.q.slice(0, 100);
+    document.querySelectorAll(".tab").forEach((t) => { t.classList.toggle("active", t.dataset.tab === state.tab); t.setAttribute("aria-selected", t.dataset.tab === state.tab); });
+  }
+
   function viewFromHash() {
     const h = location.hash.replace(/^#/, "");
-    if (!h || h.startsWith("ap=")) return "dashboard";
+    if (!h || /^(ap|tab|range|s)=/.test(h)) return "dashboard";
     const name = h.split(/[?&=]/)[0];
     return views[name] ? name : "dashboard";
   }
   function renderNav() {
-    const items = [["dashboard", "Dashboard"], ...Object.entries(views).map(([k, v]) => [k, v.title])];
+    const items = [["dashboard", T("nav.dashboard", "Dashboard")], ...Object.entries(views).map(([k, v]) => [k, T("nav." + k, v.title)])];
     $("nav").innerHTML = items.map(([k, t]) =>
       `<a href="#${k === "dashboard" ? "" : k}" class="nav-link ${k === currentView ? "active" : ""}" ${k === currentView ? 'aria-current="page"' : ""}>${esc(t)}</a>`).join("");
   }
@@ -1402,10 +1469,27 @@
     openHelp: () => openHelp(), openLayout: () => { applyLayout(); $("layout-dlg").showModal(); },
     toggleClock: () => $("clock-btn").click(), toggleTheme: () => $("theme-btn").click(),
     exportCsv: () => $("export-csv").click(), tableRows: () => tableRows(),
+    setTab: (t) => setTab(t), viewLink: () => viewLink(), markAllSeen: () => { markSeen(state.ghost, true); renderSide(); },
+    setRange: (r) => { const b = document.querySelector(`[data-range="${r}"]`); if (b) b.click(); },
+    currentView: () => currentView,
     register(name, view) { views[name] = view; renderNav(); if (viewFromHash() === name) route(); },
   };
+  applyAppearance();
+  // F082 language picker
+  if (window.GA_I18N) {
+    $("lang-select").innerHTML = window.GA_I18N.langs.map(([k, n]) => `<option value="${k}" ${k === window.GA_I18N.lang ? "selected" : ""}>${esc(n)}</option>`).join("");
+    $("lang-select").addEventListener("change", (e) => {
+      window.GA_I18N.set(e.target.value);
+      state.last = {};
+      renderNav();
+      if (state.summary) renderVerdict(state.summary);
+    });
+    window.GA_I18N.apply();
+  }
   state.clock = store.get("ghostap-clock") === "1";
+  applyViewHash();
   applyClock();
+  renderSessionBanner();
   applyColumns();
   applyLayout();
   renderNav();

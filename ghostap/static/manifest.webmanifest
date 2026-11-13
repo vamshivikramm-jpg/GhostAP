@@ -1,0 +1,16 @@
+{
+  "name": "GhostAP: passive evil twin detector",
+  "short_name": "GhostAP",
+  "description": "Dashboard of a passive Wi-Fi evil twin detector (listens to beacons only).",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f4f1",
+  "theme_color": "#1f6bc6",
+  "icons": [
+    {"src": "/static/icons/ghostap-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icons/ghostap-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/static/icons/ghostap-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+    {"src": "/static/icons/ghostap-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

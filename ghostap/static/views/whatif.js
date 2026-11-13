@@ -13,11 +13,11 @@
 
   function form(c) {
     return `<div class="two wi-grid">
-      <div class="card"><h3>Indicator weights <span class="muted">0 = ignore it</span></h3>
+      <div class="card"><h2 class="wi-h">Indicator weights <span class="muted">0 = ignore it</span></h2>
         ${Object.entries(c.weights).map(([k, v]) => slider("weights", k, label(k), v, 0, 10, 0.5)).join("")}</div>
-      <div class="card"><h3>Attack signatures <span class="muted">minimum score when matched</span></h3>
+      <div class="card"><h2 class="wi-h">Attack signatures <span class="muted">minimum score when matched</span></h2>
         ${Object.entries(c.signatures).map(([k, v]) => slider("signatures", k, label(k), v, 0, 100, 5)).join("")}
-        <h3 style="margin-top:14px">Alert thresholds</h3>
+        <h2 class="wi-h" style="margin-top:14px">Alert thresholds</h2>
         ${slider("thresholds", "medium", "MEDIUM from", c.thresholds.medium, 1, 99, 1)}
         ${slider("thresholds", "high", "HIGH from", c.thresholds.high, 2, 100, 1)}
         <div class="row-actions" style="margin-top:10px"><button class="btn" data-reset>Back to configured values</button></div>

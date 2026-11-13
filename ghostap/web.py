@@ -235,6 +235,13 @@ def create_app(db: str, config: Optional[dict] = None,
     def static_files(name):
         return send_from_directory(STATIC, name, max_age=0)
 
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        """F081 install as an app. No service worker on purpose: nothing is cached offline,
+        so an installed dashboard is never stale (and shows the login page when needed)."""
+        return send_from_directory(STATIC, "manifest.webmanifest", max_age=0,
+                                   mimetype="application/manifest+json")
+
     @app.get("/vendor/plotly.min.js")
     def plotly_js():
         path = _plotly_js()

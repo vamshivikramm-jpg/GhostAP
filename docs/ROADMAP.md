@@ -126,14 +126,14 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F073 | Docker image | H | todo |
 | F074 | Log files | A | done |
 | F075 | Settings page | H | todo |
-| F076 | Guided tour | D | todo |
-| F077 | Glossary tooltips | D | todo |
-| F078 | Command palette | D | todo |
-| F079 | Accessibility pass | D | todo |
-| F080 | Colour-blind and high-contrast modes | D | todo |
-| F081 | Install as an app | D | todo |
-| F082 | Languages | D | todo |
-| F083 | Shareable views | D | todo |
+| F076 | Guided tour | D | done |
+| F077 | Glossary tooltips | D | done |
+| F078 | Command palette | D | done |
+| F079 | Accessibility pass | D | done |
+| F080 | Colour-blind and high-contrast modes | D | done |
+| F081 | Install as an app | D | done |
+| F082 | Languages | D | done* (framework + main screen; Hindi and Telugu are drafts that need a native speaker's review) |
+| F083 | Shareable views | D | done |
 | F084 | Learned weights | G | todo |
 | F085 | Anomaly model | G | todo |
 | F086 | AI alert explainer (opt-in) | I | todo |
