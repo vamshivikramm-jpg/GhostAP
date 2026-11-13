@@ -338,7 +338,7 @@ the previous round.
 
 ### 4.9 Testing
 
-The project has 82 automated tests (`pytest`). GitHub Actions runs them on every push
+The project has 83 automated tests (`pytest`). GitHub Actions runs them on every push
 (Python 3.11, 3.12 and 3.13), together with a linter that includes security rules (ruff) and a
 dependency vulnerability scan (pip-audit). The tests cover:
 
@@ -581,7 +581,7 @@ well; closing it needs evidence an attacker cannot simply copy, such as timing.
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-pytest -q                                   # 82 tests
+pytest -q                                   # 83 tests
 python tools/make_eval_set.py               # labelled synthetic scenarios
 python evaluate.py --dataset data/eval      # tables + charts in results/
 python tools/demo.py                        # guided end-to-end demo + dashboard
@@ -593,7 +593,7 @@ python tools/demo.py                        # guided end-to-end demo + dashboard
 ghostap/   parser, storage, collector, hopper, indicators, risk, pipeline, web, evaluate, static/
 tools/     make_test_pcap.py, make_eval_set.py, label_capture.py, demo.py,
            make_architecture_figure.py
-tests/     82 pytest tests
+tests/     83 pytest tests
 .github/   GitHub Actions workflow (tests on every push)
 docs/      REPORT.md, DEMO.md, figures/
 config.yaml, evaluate.py, requirements.txt, README.md

@@ -78,7 +78,7 @@ Check everything installed correctly. This needs no adapter:
 pytest -q
 ```
 
-All tests should pass (82 at the time of writing).
+All tests should pass (83 at the time of writing).
 
 ## 3. Quick check without any hardware
 

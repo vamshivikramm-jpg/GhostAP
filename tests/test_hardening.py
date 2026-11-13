@@ -64,15 +64,38 @@ def test_truncated_capture_frames_are_rejected(tmp_path):
 
 
 def test_malformed_and_garbage_input_never_raises():
+    import random
+    rnd = random.Random(1234)                         # deterministic: same inputs every run
     stats = {}
     no_ssid = RadioTap(RAW[:45])                      # beacon without any information element
     no_ssid.time = 1.0
     assert parse_frame(no_ssid, stats) is None
-    for junk in (b"", b"\x00" * 8, os.urandom(64), RAW[:12] + os.urandom(80)):
-        p = RadioTap(junk)
+    parsed = 0
+    for i in range(300):
+        junk = rnd.randbytes(64) if i % 2 else RAW[:12] + rnd.randbytes(80)
+        try:
+            p = RadioTap(junk)
+        except Exception:     # Scapy rejects some byte strings outright; pcap readers fall back to Raw
+            continue
         p.time = 1.0
-        parse_frame(p, stats)                         # must not raise
-    assert stats.get("malformed", 0) >= 1
+        parse_frame(p, stats)                         # must never raise
+        parsed += 1
+    assert parsed > 100 and stats.get("malformed", 0) >= 1
+
+
+def test_junk_frames_inside_a_pcap_do_not_stop_collection(tmp_path):
+    import random
+    rnd = random.Random(99)
+    path = str(tmp_path / "junk.pcap")
+    w = RawPcapWriter(path, linktype=127)
+    w.write_header(None)
+    w.write_packet(RAW, sec=1, usec=0)
+    for i in range(50):
+        w.write_packet(rnd.randbytes(rnd.randint(1, 120)), sec=2 + i, usec=0)
+    w.write_packet(RAW, sec=100, usec=0)
+    w.close()
+    with Store(str(tmp_path / "j.db")) as s:
+        assert collect_pcap(path, s, {}) == 2            # both good beacons kept, junk skipped
 
 
 # ------------------------------------------------------------------ incremental profiles

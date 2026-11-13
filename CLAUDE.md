@@ -47,7 +47,7 @@ ghostap/evaluate.py     metrics, threshold sweep, charts (also ./evaluate.py)
 tools/                  make_test_pcap.py, make_eval_set.py (11 scenarios), label_capture.py,
                         demo.py, kali_monitor.sh, make_architecture_figure.py
 config.yaml             weights, thresholds, timing, known_bssids allow-list
-tests/                  pytest (82 tests); CI: .github/workflows/tests.yml (Py 3.11, 3.12, 3.13:
+tests/                  pytest (83 tests); CI: .github/workflows/tests.yml (Py 3.11, 3.12, 3.13:
                         ruff lint incl. security rules, pip-audit, tests, evaluation smoke test)
 pyproject.toml          ruff + pytest config (lint: `ruff check .`)
 ```
