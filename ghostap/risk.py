@@ -188,6 +188,9 @@ class RiskEngine:
         self._next_grid: Optional[float] = None   # next regular evaluation time
         self._last_t: Optional[float] = None      # last evaluated time (grid or final)
         self.latest: Dict[Tuple[str, str], dict] = {}
+        # F031 what-if: when set to a list, every evaluation is appended as
+        # (t, key, results or None) so it can be re-scored with other weights.
+        self.record: Optional[list] = None
 
     @classmethod
     def from_db(cls, db_path: str, config: Optional[dict] = None) -> "RiskEngine":
@@ -247,6 +250,8 @@ class RiskEngine:
                 if self.an.first_seen(*key) > t:
                     continue                      # not on air yet
                 res = self.an.evaluate(*key, until=t, window=self.window)
+                if self.record is not None:
+                    self.record.append((t, key, res))
                 if res is None:
                     raw, contrib = 0.0, None      # seen before, silent in this window
                 else:

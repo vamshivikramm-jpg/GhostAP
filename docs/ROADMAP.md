@@ -72,8 +72,8 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F019 | Allow-list editor | C | done |
 | F020 | Incident story card | D | done |
 | F021 | Sensor heartbeat | D | done |
-| F022 | Customisable layout | D | todo |
-| F023 | "Since you last looked" | D | todo |
+| F022 | Customisable layout | D | done |
+| F023 | "Since you last looked" | D | done |
 | F024 | Alert filters and sorting | D | done |
 | F025 | Bulk triage | D | done |
 | F026 | Snooze and mute rules | D | done |
@@ -81,15 +81,15 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F028 | Beacon difference viewer | D | done |
 | F029 | Vendor names | D | done |
 | F030 | Signal and uptime charts | D | done |
-| F031 | What-if weights | D | todo |
+| F031 | What-if weights | D | done |
 | F032 | Evidence pcap download | D | done |
 | F033 | Related access points | D | done |
 | F034 | Network health card | C | done |
 | F035 | Network risk score | C | done |
-| F036 | Clock time and time ranges | D | todo |
-| F037 | Timeline annotations | D | todo |
-| F038 | Large-site performance | D | todo |
-| F039 | Table export and columns | D | todo |
+| F036 | Clock time and time ranges | D | done |
+| F037 | Timeline annotations | D | done |
+| F038 | Large-site performance | D | done |
+| F039 | Table export and columns | D | done |
 | F040 | Sessions page | A | done |
 | F041 | Capture control panel | J | todo |
 | F042 | Capture quality panel | B | done |

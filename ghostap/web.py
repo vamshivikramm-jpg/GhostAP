@@ -62,6 +62,29 @@ LOGIN_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
 <code>/?token=...</code>.</p></body></html>"""
 
 
+def _int_arg(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(request.args.get(name, default))))
+    except ValueError:
+        return default
+
+
+def _downsample(series: dict, points: int) -> dict:
+    """At most `points` points per line; each bucket keeps its highest score."""
+    n = len(series["ts"])
+    if n <= points:
+        return series
+    out = dict(series, ts=[], score=[], raw=[], level=[])
+    step = n / points
+    for b in range(points):
+        lo, hi = int(b * step), max(int((b + 1) * step), int(b * step) + 1)
+        i = max(range(lo, min(hi, n)), key=lambda j: series["score"][j])
+        for k in ("ts", "score", "raw", "level"):
+            out[k].append(series[k][i])
+    out["downsampled_from"] = n
+    return out
+
+
 def is_loopback(host: str) -> bool:
     host = host.strip("[]").lower()
     if host in LOOPBACK_NAMES:
@@ -424,19 +447,50 @@ def create_app(db: str, config: Optional[dict] = None,
     web_monitored.register(app, ctx)
     from . import web_ap
     web_ap.register(app, ctx)
+    from . import web_tools
+    web_tools.register(app, ctx)
 
     @app.get("/api/timeline")
     def timeline():
+        """Risk lines for the timeline chart (F038: bounded for large sites).
+
+        Every access point that reached MEDIUM, then the highest-scoring others up to `top`
+        lines, are sent in full; the rest are folded into one line holding their highest
+        score at each step. Each line is cut to at most `points` points, keeping the
+        highest score of every bucket so that no peak disappears."""
+        top = _int_arg("top", 30, 1, 500)
+        points = _int_arg("points", 800, 50, 20000)
         series = defaultdict(lambda: {"ts": [], "score": [], "raw": [], "level": []})
         with store() as s:
-            for r in s.timeline():
-                d = series[(r["ssid"], r["bssid"])]
-                d["ts"].append(r["ts"])
-                d["score"].append(r["score"])
-                d["raw"].append(r["raw_score"])
-                d["level"].append(r["level"])
-        return jsonify([dict(ssid=k[0], bssid=k[1], peak=max(v["score"]), **v)
-                        for k, v in series.items()])
+            for r in s.conn.execute("SELECT ts, ssid, bssid, score, raw_score, level FROM risk_timeline "
+                                    "ORDER BY ssid, bssid, ts"):
+                d = series[(r[1], r[2])]
+                d["ts"].append(r[0])
+                d["score"].append(r[3])
+                d["raw"].append(r[4])
+                d["level"].append(r[5])
+        rows = [dict(ssid=k[0], bssid=k[1], peak=max(v["score"]), **v) for k, v in series.items()]
+        rows.sort(key=lambda r: -r["peak"])
+        med = cfg["thresholds"]["medium"]
+        keep = [r for r in rows if r["peak"] >= med]
+        keep += [r for r in rows if r["peak"] < med][:max(0, top - len(keep))]
+        kept = {(r["ssid"], r["bssid"]) for r in keep}
+        rest = [r for r in rows if (r["ssid"], r["bssid"]) not in kept]
+        out = [_downsample(r, points) for r in keep]
+        if rest:
+            env: dict = {}
+            for r in rest:
+                for t, sc, raw in zip(r["ts"], r["score"], r["raw"]):
+                    e = env.get(t)
+                    env[t] = (max(e[0], sc), max(e[1], raw)) if e else (sc, raw)
+            ts = sorted(env)
+            agg = {"ssid": "", "bssid": "", "aggregate": len(rest), "peak": max(v[0] for v in env.values()),
+                   "ts": ts, "score": [env[t][0] for t in ts], "raw": [env[t][1] for t in ts],
+                   "level": [None] * len(ts)}
+            out.append(_downsample(agg, points))
+        resp = jsonify(out)
+        resp.headers["X-GhostAP-Lines"] = "{} of {}".format(len(keep), len(rows))
+        return resp
 
     @app.get("/api/events")
     def events():

@@ -41,6 +41,26 @@
       label: "Duplicate name",
       long: "The simple comparison detector: it flags every access point whose network name is used by more than one access point.",
     },
+    karma: {
+      label: "KARMA / MANA",
+      long: "Attack signature. One radio answering with many different network names is how KARMA and MANA tools lure phones that look for networks they joined before. When it matches, the score is raised to at least the signature's minimum.",
+    },
+    lookalike_ssid: {
+      label: "Look-alike name",
+      long: "Attack signature. A name that is one or two characters away from a known network (for example MVSR_WiFi vs. MVSR-WiFi, or a zero for an O). The access point is then compared with the network it imitates.",
+    },
+    known_tool: {
+      label: "Known attack tool",
+      long: "Attack signature. The beacon matches an entry in the attack-tool fingerprint library (data/attack_tools.json). The built-in entries are synthetic examples and are switched off until real lab recordings replace them.",
+    },
+    deauth_flood: {
+      label: "Deauthentication flood",
+      long: "Many deauthentication or disassociation frames sent in the name of one access point in a short time. Attackers use this to push clients off the real network and onto the twin. GhostAP records only the access point's address, never the clients'.",
+    },
+    beacon_flood: {
+      label: "Beacon flood",
+      long: "An unusual number of new access points appearing within a minute, as tools that broadcast many fake networks do.",
+    },
   };
   const TRIAGE = [
     ["new", "New"], ["investigating", "Investigating"],
@@ -55,6 +75,7 @@
     aps: [], ghost: [], base: [], networks: [], series: [], events: [],
     known: null, plotBound: false, version: null, offline: false,
     alertFilter: { level: "all", status: "open", q: "" }, picked: new Set(), incidents: [],
+    clock: false, range: "all", notes: [],
   };
 
   // ------------------------------------------------------------------ helpers
@@ -63,7 +84,17 @@
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  const rel = (ts) => (ts == null || state.t0 == null) ? "–" : "t+" + Math.round(ts - state.t0) + "s";
+  // F036: relative capture time ("t+200s") or clock time, chosen with the clock button.
+  const two = (n) => String(n).padStart(2, "0");
+  function clockText(ts) {
+    const d = new Date(ts * 1000), now = new Date();
+    const hms = `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+    return d.toDateString() === now.toDateString() ? hms : d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" }) + " " + hms;
+  }
+  const rel = (ts) => (ts == null || state.t0 == null) ? "–" : state.clock ? clockText(ts) : "t+" + Math.round(ts - state.t0) + "s";
+  /** x value on every chart: seconds since the capture started, or a Date in clock mode. */
+  const X = (ts) => (state.clock ? new Date(ts * 1000) : ts - state.t0);
+  const xAxisTitle = () => (state.clock ? "time" : "capture time (s)");
   const fmt = (n, d = 1) => (n == null || Number.isNaN(n) ? "–" : Number(n).toFixed(d));
   const keyOf = (o) => o.ssid + "\u0000" + o.bssid;
   const isSel = (o) => state.sel && state.sel.ssid === o.ssid && state.sel.bssid === o.bssid;
@@ -74,6 +105,7 @@
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } },
+    del(k) { try { localStorage.removeItem(k); } catch (e) { /* private mode */ } },
   };
 
   function uptime(s) {
@@ -150,7 +182,8 @@
       margin: { l: 42, r: 14, t: 10, b: 40 },
       hoverlabel: { bgcolor: css("--surface"), bordercolor: css("--axis"), font: { color: css("--text") } },
       xaxis: { gridcolor: css("--grid"), linecolor: css("--axis"), zeroline: false, tickfont: { color: css("--muted") },
-               title: { text: "capture time (s)", font: { size: 11, color: css("--muted") } } },
+               type: state.clock ? "date" : "linear",
+               title: { text: xAxisTitle(), font: { size: 11, color: css("--muted") } } },
       yaxis: { range: [0, 100], gridcolor: css("--grid"), zeroline: false, tickfont: { color: css("--muted") } },
       showlegend: false,
     }, extra || {});
@@ -312,7 +345,7 @@
         ${shown.length ? shown.map((a) => `<div class="item-row">
           <input type="checkbox" data-pick="${a.id}" ${state.picked.has(a.id) ? "checked" : ""} aria-label="Select alert ${esc(a.ssid)} ${esc(a.bssid)}">
           <button class="item ${isSel(a) ? "selected" : ""} ${a.triage_status === "false_positive" || a.muted ? "dismissed" : ""}" data-ssid="${esc(a.ssid)}" data-bssid="${esc(a.bssid)}">
-          ${lvl(a.level)}<span class="who">${esc(ssidLabel(a.ssid))}</span><span class="score">${fmt(a.score, 0)}</span>
+          ${lvl(a.level)}<span class="who">${unseenOf(a) ? `<i class="unseen-dot" title="${unseenOf(a) === "new" ? "New" : "Escalated to HIGH"} since you last looked"></i>` : ""}${esc(ssidLabel(a.ssid))}</span><span class="score">${fmt(a.score, 0)}</span>
           <span class="sub"><span class="mono">${esc(a.bssid)}</span>· first ${rel(a.first_ts)} ${kind(a)} ${triageTag(a.triage_status)} ${a.muted ? '<span class="tag">muted</span>' : ""}</span>
         </button></div>`).join("") : '<div class="empty">No alert matches these filters.</div>'}`;
     } else if (state.tab === "networks") {
@@ -403,6 +436,7 @@
   // ------------------------------------------------------------------ selection
   function select(ssid, bssid, user) {
     state.sel = { ssid, bssid };
+    if (user) markSeen((state.ghost || []).filter((a) => a.ssid === ssid && a.bssid === bssid));
     try { history.replaceState(null, "", "#ap=" + encodeURIComponent(ssid) + "|" + encodeURIComponent(bssid)); } catch (e) { /* ignore */ }
     renderSide();
     renderTable();
@@ -689,7 +723,7 @@
     const idx = { rssi: 1, rate: 2, uptime: 3 }[kind];
     const pal = ["--s1", "--s2", "--s3", "--s4", "--s5"];
     const traces = s.series.slice(0, 6).map((ser, i) => ({
-      x: ser.points.map((p) => p[0] - state.t0), y: ser.points.map((p) => (kind === "uptime" && p[idx] != null ? p[idx] / 3600 : p[idx])),
+      x: ser.points.map((p) => X(p[0])), y: ser.points.map((p) => (kind === "uptime" && p[idx] != null ? p[idx] / 3600 : p[idx])),
       name: ser.bssid === s.focus ? "this AP" : esc(ser.bssid), mode: "lines", connectgaps: false,
       line: { color: ser.bssid === s.focus ? css("--critical") : css(pal[(i - 1 + pal.length) % pal.length]), width: ser.bssid === s.focus ? 2.5 : 1.5 },
       hovertemplate: (kind === "rssi" ? "%{y:.0f} dBm" : kind === "uptime" ? "%{y:.2f} h" : "%{y:.1f}/s") + "<extra>" + esc(ser.bssid) + "</extra>",
@@ -718,7 +752,7 @@
       $("ap-chart").innerHTML = '<div class="empty">Appears once the learning period is over.</div>';
       return;
     }
-    const x = tl.map((r) => r.ts - state.t0);
+    const x = tl.map((r) => X(r.ts));
     const decor = thresholdDecor();
     const traces = [
       { x, y: tl.map((r) => r.raw_score), name: "Raw (each 10 s)", mode: "lines",
@@ -728,7 +762,7 @@
     ];
     if (alert) {
       const pts = [[alert.first_ts, "alert raised", "diamond"], [alert.high_ts, "reached HIGH", "triangle-up"]].filter((p) => p[0] != null);
-      traces.push({ x: pts.map((p) => p[0] - state.t0), y: pts.map((p) => (tl.find((r) => r.ts === p[0]) || {}).score),
+      traces.push({ x: pts.map((p) => X(p[0])), y: pts.map((p) => (tl.find((r) => r.ts === p[0]) || {}).score),
         mode: "markers", name: "Alert", text: pts.map((p) => p[1]), hovertemplate: "%{text}<extra></extra>",
         marker: { size: 11, symbol: pts.map((p) => p[2]), color: css("--critical"), line: { color: css("--surface"), width: 2 } } });
     }
@@ -803,6 +837,141 @@
     store.set("ghostap-ruleout-" + list.dataset.alert, JSON.stringify(ids));
   });
 
+  // ------------------------------------------------------------------ F023 since you last looked
+  // Kept in this browser only: which alerts (and at which level) you have already seen.
+  const seenKey = () => "ghostap-seen-" + ((state.summary && state.summary.status && state.summary.status.session) || "db");
+  function initSeen(ghost) {
+    let s = null;
+    try { s = JSON.parse(store.get(seenKey()) || "null"); } catch (e) { s = null; }
+    if (!s || !s.alerts) {                       // first visit: nothing is "new" yet
+      s = { at: Date.now(), alerts: Object.fromEntries(ghost.map((a) => [a.id, a.level])) };
+      store.set(seenKey(), JSON.stringify(s));
+    }
+    state.seen = s;
+  }
+  function unseenOf(a) {
+    const s = state.seen;
+    if (!s || a.muted || a.triage_status === "false_positive") return null;
+    const prev = s.alerts[a.id];
+    return prev == null ? "new" : prev !== "HIGH" && a.level === "HIGH" ? "escalated" : null;
+  }
+  function markSeen(alerts, all) {
+    if (!state.seen) return;
+    alerts.forEach((a) => { state.seen.alerts[a.id] = a.level; });
+    if (all) state.seen.at = Date.now();
+    store.set(seenKey(), JSON.stringify(state.seen));
+    renderSince();
+  }
+  function ago(ms) {
+    const m = Math.round((Date.now() - ms) / 60000);
+    return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 48 * 60 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago";
+  }
+  function renderSince() {
+    const el = $("since");
+    const fresh = (state.ghost || []).filter(unseenOf);
+    if (!fresh.length) { el.hidden = true; return; }
+    const nNew = fresh.filter((a) => unseenOf(a) === "new").length, nUp = fresh.length - nNew;
+    el.hidden = false;
+    el.innerHTML = `<span><b>Since you last looked</b> <span class="muted">(${ago(state.seen.at)})</span>:
+      ${nNew ? `${nNew} new alert${nNew > 1 ? "s" : ""}` : ""}${nNew && nUp ? ", " : ""}${nUp ? `${nUp} escalated to HIGH` : ""}.</span>
+      <button class="btn small" data-since-show>Show</button><button class="btn small" data-since-ok>Mark all as seen</button>`;
+  }
+  $("since").addEventListener("click", (e) => {
+    if (e.target.closest("[data-since-ok]")) { markSeen(state.ghost, true); renderSide(); return; }
+    if (e.target.closest("[data-since-show]")) {
+      const a = (state.ghost || []).find(unseenOf);
+      state.tab = "alerts";
+      document.querySelector('[data-tab="alerts"]').click();
+      if (a) select(a.ssid, a.bssid, true);
+    }
+  });
+
+  // ------------------------------------------------------------------ F039 table columns and export
+  const COLS = ["Network", "BSSID", "CH", "Security", "Signal", "Beacons", "First seen", "Risk now", "Peak", "Level"];
+  function loadHidden() { try { return new Set(JSON.parse(store.get("ghostap-hidden-cols") || "[]")); } catch (e) { return new Set(); } }
+  function applyColumns() {
+    const hidden = loadHidden(), table = document.querySelector(".ap-table");
+    COLS.forEach((_, i) => table.classList.toggle("hide-c" + (i + 1), hidden.has(i + 1)));
+    $("col-list").innerHTML = COLS.map((c, i) => `<label class="check"><input type="checkbox" data-col="${i + 1}" ${hidden.has(i + 1) ? "" : "checked"} ${i < 2 ? "disabled" : ""}> ${esc(c)}</label>`).join("");
+  }
+  $("col-list").addEventListener("change", (e) => {
+    const n = Number(e.target.dataset.col), hidden = loadHidden();
+    if (e.target.checked) hidden.delete(n); else hidden.add(n);
+    store.set("ghostap-hidden-cols", JSON.stringify([...hidden]));
+    applyColumns();
+  });
+  /** Spreadsheet-safe CSV: text that starts like a formula is prefixed with ' (SSIDs come from the air). */
+  function csvCell(v) {
+    if (v == null) return "";
+    if (typeof v === "number") return String(v);
+    let s = String(v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+  $("export-csv").addEventListener("click", () => {
+    const rows = tableRows();
+    const head = ["ssid", "bssid", "vendor", "channels", "security", "rssi_avg_dbm", "beacons", "first_seen_utc", "first_seen_s",
+      "risk_now", "peak_risk", "level", "triage", "in_baseline"];
+    const lines = [head.join(",")].concat(rows.map((p) => [p.ssid, p.bssid, p.vendor, p.channels, p.securities,
+      p.rssi_avg == null ? null : Math.round(p.rssi_avg * 10) / 10, p.frames, new Date(p.first_seen * 1000).toISOString(),
+      Math.round(p.first_seen - state.t0), p.score, p.peak_score, p.level, p.triage_status, p.in_baseline ? "yes" : "no"].map(csvCell).join(",")));
+    const blob = new Blob([lines.join("\r\n") + "\r\n"], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "ghostap_access_points.csv";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    notice(`Exported ${rows.length} access point${rows.length === 1 ? "" : "s"}${state.search ? " matching the search" : ""}.`, "ok");
+  });
+
+  // ------------------------------------------------------------------ F022 layout
+  const PANELS = [["tiles", "Summary tiles"], ["since", "Since you last looked"], ["incident", "Incident story"],
+    ["main", "Alerts and details"], ["timeline", "Risk over time"], ["table", "All access points"]];
+  function loadLayout() {
+    try {
+      const l = JSON.parse(store.get("ghostap-layout") || "null");
+      if (l && Array.isArray(l.order)) return { order: l.order.filter((k) => PANELS.some((p) => p[0] === k)), hidden: l.hidden || [] };
+    } catch (e) { /* default */ }
+    return { order: PANELS.map((p) => p[0]), hidden: [] };
+  }
+  function applyLayout() {
+    const l = loadLayout();
+    PANELS.forEach(([k]) => { if (!l.order.includes(k)) l.order.push(k); });
+    l.order.forEach((k, i) => {
+      const el = document.querySelector(`[data-panel="${k}"]`);
+      if (el) { el.style.order = String(i + 1); el.classList.toggle("panel-off", l.hidden.includes(k)); }
+    });
+    $("layout-list").innerHTML = l.order.map((k, i) => {
+      const name = (PANELS.find((p) => p[0] === k) || [k, k])[1];
+      return `<li><label class="check"><input type="checkbox" data-show="${k}" ${l.hidden.includes(k) ? "" : "checked"}> ${esc(name)}</label>
+        <span><button class="btn small" data-move="${k}" data-dir="-1" ${i === 0 ? "disabled" : ""} aria-label="Move ${esc(name)} up">↑</button>
+        <button class="btn small" data-move="${k}" data-dir="1" ${i === l.order.length - 1 ? "disabled" : ""} aria-label="Move ${esc(name)} down">↓</button></span></li>`;
+    }).join("");
+    return l;
+  }
+  $("layout-list").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-move]");
+    if (!b) return;
+    const l = loadLayout(), i = l.order.indexOf(b.dataset.move), j = i + Number(b.dataset.dir);
+    if (i < 0 || j < 0 || j >= l.order.length) return;
+    [l.order[i], l.order[j]] = [l.order[j], l.order[i]];
+    store.set("ghostap-layout", JSON.stringify(l));
+    applyLayout();
+    const again = $("layout-list").querySelector(`[data-move="${b.dataset.move}"][data-dir="${b.dataset.dir}"]`);
+    if (again && !again.disabled) again.focus();
+  });
+  $("layout-list").addEventListener("change", (e) => {
+    const k = e.target.dataset.show;
+    if (!k) return;
+    const l = loadLayout();
+    l.hidden = e.target.checked ? l.hidden.filter((x) => x !== k) : [...new Set([...l.hidden, k])];
+    store.set("ghostap-layout", JSON.stringify(l));
+    applyLayout();
+    if (e.target.checked && k === "timeline") renderTimeline();
+  });
+  $("layout-reset").addEventListener("click", () => { store.del("ghostap-layout"); applyLayout(); renderTimeline(); });
+  $("layout-btn").addEventListener("click", () => { applyLayout(); $("layout-dlg").showModal(); });
+
   // ------------------------------------------------------------------ timeline + events
   function renderTimeline() {
     const el = $("timeline-chart");
@@ -815,14 +984,20 @@
     }
     const ph = el.querySelector(".empty");
     if (ph) ph.remove();
-    state.series.slice().sort((a, b) => a.ts[0] - b.ts[0] || keyOf(a).localeCompare(keyOf(b))).forEach((s) => colorFor(keyOf(s)));
+    state.series.filter((s) => !s.aggregate).sort((a, b) => a.ts[0] - b.ts[0] || keyOf(a).localeCompare(keyOf(b))).forEach((s) => colorFor(keyOf(s)));
     const anySel = state.sel && series.some(isSel);
     const traces = [];
     let otherShown = false;
     series.forEach((s) => {
+      if (s.aggregate) {               // F038: every other access point folded into one line
+        traces.push({ x: s.ts.map((t) => X(t)), y: state.scoreField === "raw" ? s.raw : s.score, mode: "lines",
+          name: `${s.aggregate} other access points (highest)`, line: { color: css("--s-other"), width: 1, dash: "dot" },
+          hovertemplate: `highest of ${s.aggregate} other APs: %{y:.1f}<extra></extra>` });
+        return;
+      }
       const k = keyOf(s), other = state.colorOf.get(k) >= SLOTS, sel = isSel(s);
       traces.push({
-        x: s.ts.map((t) => t - state.t0), y: state.scoreField === "raw" ? s.raw : s.score, mode: "lines",
+        x: s.ts.map((t) => X(t)), y: state.scoreField === "raw" ? s.raw : s.score, mode: "lines",
         name: other ? "Other APs" : esc(`${s.ssid} ${s.bssid}`), legendgroup: other ? "other" : k,
         showlegend: !other || !otherShown,
         opacity: anySel && !sel ? 0.35 : 1,
@@ -840,7 +1015,7 @@
         return i >= 0 ? (state.scoreField === "raw" ? s.raw : s.score)[i] : null;
       };
       traces.push({
-        x: marks.map((e) => e.ts - state.t0), y: marks.map(yAt), mode: "markers", name: "Alert events",
+        x: marks.map((e) => X(e.ts)), y: marks.map(yAt), mode: "markers", name: "Alert events",
         customdata: marks.map((e) => [e.ssid, e.bssid]),
         marker: { size: 11, symbol: marks.map((e) => (e.type === "escalated" ? "triangle-up" : "diamond")),
                   color: marks.map((e) => colorFor(keyOf(e))), line: { color: css("--surface"), width: 2 } },
@@ -848,12 +1023,23 @@
       });
     }
     const decor = thresholdDecor(), s = state.summary;
+    const end = s && s.capture_end != null ? s.capture_end : null;
+    const win = { "5m": 300, "15m": 900, "1h": 3600 }[state.range];
+    const from = win && end != null ? Math.max(state.t0, end - win) : state.t0;
+    // F037: analyst notes as dotted vertical lines
+    (state.notes || []).forEach((n) => {
+      decor.shapes.push({ type: "line", xref: "x", yref: "paper", x0: X(n.ts), x1: X(n.ts), y0: 0, y1: 1,
+        line: { color: css("--accent"), width: 1, dash: "dot" } });
+      decor.annotations.push({ xref: "x", yref: "paper", x: X(n.ts), y: 1, yanchor: "bottom", showarrow: false,
+        text: esc(n.text.length > 28 ? n.text.slice(0, 27) + "…" : n.text), font: { size: 10, color: css("--accent-ink") },
+        hovertext: esc(n.text + " (" + rel(n.ts) + ")") });
+    });
     Plotly.react(el, traces, baseLayout({
       showlegend: true, legend: { orientation: "h", y: -0.22, x: 0, font: { color: css("--text-2") } },
-      hovermode: "closest", margin: { l: 40, r: 14, t: 8, b: 40 },
-      xaxis: Object.assign(baseLayout().xaxis, { range: [0, s && s.capture_end != null ? s.capture_end - s.capture_start : undefined] }),
+      hovermode: "closest", margin: { l: 40, r: 14, t: state.notes && state.notes.length ? 22 : 8, b: 40 },
+      xaxis: Object.assign(baseLayout().xaxis, { range: end != null ? [X(from), X(end)] : undefined }),
       yaxis: Object.assign(baseLayout().yaxis, { title: { text: state.scoreField === "raw" ? "raw risk" : "risk", font: { size: 11, color: css("--muted") } } }),
-      shapes: decor.shapes, annotations: decor.annotations, uirevision: "keep-zoom",
+      shapes: decor.shapes, annotations: decor.annotations, uirevision: "zoom-" + state.range + "-" + state.clock,
     }), PLOT_CFG);
     if (!state.plotBound) {
       el.on("plotly_click", (ev) => {
@@ -869,6 +1055,73 @@
     renderTimeline();
   }));
   $("only-alerting").addEventListener("change", (e) => { state.onlyAlerting = e.target.checked; renderTimeline(); });
+  document.querySelectorAll("[data-range]").forEach((b) => b.addEventListener("click", () => {
+    state.range = b.dataset.range;
+    document.querySelectorAll("[data-range]").forEach((x) => { x.classList.toggle("active", x === b); x.setAttribute("aria-pressed", x === b); });
+    renderTimeline();
+  }));
+
+  // ------------------------------------------------------------------ F037 notes on the timeline
+  async function loadNotes() {
+    try { state.notes = await get("/api/annotations"); } catch (e) { state.notes = []; }
+    renderNotes();
+  }
+  function renderNotes() {
+    const end = state.summary && state.summary.capture_end;
+    const at = $("note-at");
+    if (at && !at.value && end != null) at.placeholder = state.clock ? clockText(end).split(" ").pop() : "t+" + Math.round(end - state.t0);
+    $("notes").innerHTML = (state.notes || []).map((n) => `<li><span class="t">${rel(n.ts)}</span><span>${esc(n.text)}</span>
+      <button class="icon-x" data-note-del="${n.id}" aria-label="Delete note">✕</button></li>`).join("");
+  }
+  /** "t+120", "120", "14:05" or "14:05:30" (clock time on the capture's last day) -> epoch seconds */
+  function parseWhen(v) {
+    const s = state.summary;
+    if (!v) return s ? s.capture_end : null;
+    v = v.trim();
+    let m = /^t?\+?(\d+(?:\.\d+)?)\s*s?$/.exec(v);
+    if (m) return state.t0 + Number(m[1]);
+    m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(v);
+    if (m && s) {
+      const d = new Date(s.capture_end * 1000);
+      d.setHours(Number(m[1]), Number(m[2]), Number(m[3] || 0), 0);
+      return d.getTime() / 1000;
+    }
+    return NaN;
+  }
+  $("note-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const ts = parseWhen($("note-at").value), text = $("note-text").value;
+    if (!Number.isFinite(ts)) { notice("Write the time as t+120, 120 or 14:05:30.", "error"); return; }
+    const r = await post("/api/annotations", { ts, text });
+    if (!r.ok) { notice((r.data && r.data.error) || "Could not save the note", "error"); return; }
+    $("note-text").value = ""; $("note-at").value = "";
+    await loadNotes();
+    renderTimeline();
+  });
+  $("notes").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-note-del]");
+    if (!b) return;
+    const r = await post(`/api/annotations/${b.dataset.noteDel}/delete`, {});
+    if (!r.ok) { notice("Could not delete the note", "error"); return; }
+    await loadNotes();
+    renderTimeline();
+  });
+
+  // F036: clock time switch
+  function applyClock() {
+    $("clock-btn").setAttribute("aria-pressed", state.clock);
+    $("clock-btn").classList.toggle("on", state.clock);
+    document.body.classList.toggle("clock", state.clock);
+    $("clock-btn").title = state.clock ? "Showing clock time: switch to time since the capture started" : "Showing time since the capture started: switch to clock time";
+  }
+  $("clock-btn").addEventListener("click", () => {
+    state.clock = !state.clock;
+    store.set("ghostap-clock", state.clock ? "1" : "0");
+    applyClock();
+    state.last = {};                    // re-render everything that shows times
+    refresh(true, true);
+    renderNotes();
+  });
 
   function renderEvents() {
     const f = state.evFilter;
@@ -893,18 +1146,25 @@
   }));
 
   // ------------------------------------------------------------------ AP table
-  function renderTable() {
+  /** The access points as the table shows them: searched and sorted. */
+  function tableRows() {
     const q = state.search.trim().toLowerCase();
-    let rows = state.aps.filter((a) => !q || [a.ssid, a.bssid, a.vendor, a.securities, a.channels, a.level].join(" ").toLowerCase().includes(q));
+    const rows = state.aps.filter((a) => !q || [a.ssid, a.bssid, a.vendor, a.securities, a.channels, a.level].join(" ").toLowerCase().includes(q));
     const { key, dir } = state.sort;
-    rows = rows.slice().sort((a, b) => {
+    return rows.slice().sort((a, b) => {
       const x = a[key], y = b[key];
       if (x == null && y == null) return 0;
       if (x == null) return 1;
       if (y == null) return -1;
       return (typeof x === "number" ? x - y : String(x).localeCompare(String(y))) * dir;
     });
-    $("ap-rows").innerHTML = rows.length ? rows.map((p) => `
+  }
+  function renderTable() {
+    const q = state.search.trim().toLowerCase();
+    const all = tableRows();
+    const LIMIT = 300;                 // F038: a large site renders in pages; search, sort and export see every row
+    const rows = state.tableAll ? all : all.slice(0, LIMIT);
+    $("ap-rows").innerHTML = (rows.length ? rows.map((p) => `
       <tr class="${isSel(p) ? "selected" : ""}" data-ssid="${esc(p.ssid)}" data-bssid="${esc(p.bssid)}" tabindex="0">
         <td><span class="swatch" style="background:${colorFor(keyOf(p))}"></span>${esc(p.ssid)}${p.in_baseline ? "" : ' <span class="tag new">new</span>'}</td>
         <td class="mono">${esc(p.bssid)}<span class="vendor">${esc(p.vendor || (p.local_mac ? "locally administered" : ""))}</span></td>
@@ -916,9 +1176,11 @@
         <td class="num risk-col">${riskbar(p.score, p.level)}</td>
         <td class="num">${fmt(p.peak_score, 0)}</td>
         <td>${lvl(p.level)} ${triageTag(p.triage_status)}</td>
-      </tr>`).join("") : `<tr><td colspan="10" class="empty">${q ? "No access point matches “" + esc(state.search) + "”." : "No access points yet."}</td></tr>`;
+      </tr>`).join("") : `<tr><td colspan="10" class="empty">${q ? "No access point matches “" + esc(state.search) + "”." : "No access points yet."}</td></tr>`)
+      + (all.length > rows.length ? `<tr><td colspan="10" class="more-row">Showing ${rows.length} of ${all.length} access points. <button class="btn small" data-table-all>Show all</button> or search to narrow them down.</td></tr>` : "");
   }
   $("ap-rows").addEventListener("click", (e) => {
+    if (e.target.closest("[data-table-all]")) { state.tableAll = true; renderTable(); return; }
     const tr = e.target.closest("tr[data-bssid]");
     if (tr) select(tr.dataset.ssid, tr.dataset.bssid, true);
   });
@@ -971,7 +1233,7 @@
   function openHelp() {
     const w = state.summary ? state.summary.weights : {};
     $("glossary").innerHTML = Object.keys(IND).filter((k) => k !== "duplicate_ssid").map((k) =>
-      `<dt>${esc(IND[k].label)} <span class="muted">(weight ${fmt(w[k])})</span></dt><dd>${esc(IND[k].long)}</dd>`).join("");
+      `<dt>${esc(IND[k].label)} <span class="muted">(${w[k] != null ? "weight " + fmt(w[k]) : "signature / separate detector"})</span></dt><dd>${esc(IND[k].long)}</dd>`).join("");
     const dlg = $("help");
     if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
   }
@@ -1035,11 +1297,14 @@
         ]);
         state.version = summary.data_version;
         try { state.incidents = await get("/api/incidents"); } catch (e) { state.incidents = []; }
+        await loadNotes();
+        if (state.seen === undefined) initSeen(ghost);
         notify(ghost);
         state.ghost = ghost; state.base = base; state.networks = networks; state.events = events; state.aps = aps; state.series = series;
         if (changed("side", [ghost, base, networks, state.tab])) renderSide();
         if (changed("incident", state.incidents)) renderIncident();
-        if (changed("timeline", [series, events, summary.capture_end])) renderTimeline();
+        renderSince();
+        if (changed("timeline", [series, events, summary.capture_end, state.notes])) renderTimeline();
         if (changed("events", events)) renderEvents();
         if (changed("aps", aps)) renderTable();
         if (state.sel) loadDetail();
@@ -1134,6 +1399,10 @@
     refresh: () => refresh(true, true), setSession, route,
     register(name, view) { views[name] = view; renderNav(); if (viewFromHash() === name) route(); },
   };
+  state.clock = store.get("ghostap-clock") === "1";
+  applyClock();
+  applyColumns();
+  applyLayout();
   renderNav();
   refresh(false);
 })();

@@ -40,6 +40,15 @@ CREATE TABLE IF NOT EXISTS layouts (
     bssid       TEXT
 );
 
+-- F037: analyst notes on the timeline ("plugged in the hotspot", "attack started")
+CREATE TABLE IF NOT EXISTS annotations (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       REAL    NOT NULL,        -- capture time the note refers to
+    text     TEXT    NOT NULL,
+    actor    TEXT,
+    created  REAL
+);
+
 -- F005: deauthentication / disassociation frames (AP address only, no client addresses)
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -208,6 +217,21 @@ class Store:
         self._pending += 1
         if self._pending >= self.BATCH_SIZE:
             self.commit()
+
+    # ---- F037 annotations ---------------------------------------------------- #
+    def add_annotation(self, ts: float, text: str, actor: str, created: float) -> int:
+        cur = self.conn.execute("INSERT INTO annotations (ts, text, actor, created) VALUES (?, ?, ?, ?)",
+                                (ts, text, actor, created))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def annotations(self) -> List[dict]:
+        return [dict(r) for r in self.conn.execute("SELECT * FROM annotations ORDER BY ts, id")]
+
+    def delete_annotation(self, ann_id: int) -> bool:
+        n = self.conn.execute("DELETE FROM annotations WHERE id = ?", (ann_id,)).rowcount
+        self.conn.commit()
+        return n > 0
 
     def add_event(self, ev: dict) -> None:
         """F005: one deauthentication / disassociation frame."""
