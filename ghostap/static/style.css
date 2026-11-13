@@ -461,3 +461,17 @@ details.settings[open] > summary { margin-bottom: 10px; }
 .history ul { margin: 4px 0 0; padding-left: 16px; }
 .small-select { padding: 1px 8px; font-size: 12px; border-radius: 99px; }
 .pill-bad { border-color: var(--critical); background: var(--critical-soft); }
+
+/* AP detail: beacon diff, related APs */
+.bdiff p { margin: 0 0 8px; }
+.bd-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bd-table th, .bd-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.bd-table td.mono { word-break: break-all; max-width: 160px; }
+.bd-changed td, .bd-only_this td, .bd-only_known td { background: var(--serious-soft, rgba(240, 160, 40, .12)); }
+.bd-tag { font-family: inherit; font-size: 11px; padding: 0 6px; border-radius: 99px; border: 1px solid var(--critical); color: var(--critical); }
+.small { font-size: 12px; }
+.related { margin-top: 14px; }
+.rel-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.rel-list li { display: grid; gap: 2px; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+.vendor { display: block; font-family: system-ui, sans-serif; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 180px; }

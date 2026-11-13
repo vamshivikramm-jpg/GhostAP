@@ -28,6 +28,8 @@ def test_wpa2_beacon():
     assert isinstance(fp, str) and len(fp) == 12
     assert obs.pop("rsn") == "pw=CCMP;akm=PSK;pmf=none"
     assert obs.pop("freq") is None                 # this test frame has no frequency field
+    layout = obs.pop("layout")                      # F028: what the fingerprint is made of
+    assert layout[0].startswith("cap=") and "0" in layout
     assert obs == {
         "ts": 1700000000.5,
         "frame_type": "beacon",

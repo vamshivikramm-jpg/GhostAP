@@ -31,6 +31,15 @@ CREATE TABLE IF NOT EXISTS observations (
     freq            INTEGER           -- MHz from the radio header (F009)
 );
 
+-- F028: what each beacon fingerprint is made of (one row per distinct fingerprint)
+CREATE TABLE IF NOT EXISTS layouts (
+    fingerprint TEXT PRIMARY KEY,
+    layout      TEXT NOT NULL,        -- JSON list, see parser.beacon_layout
+    first_ts    REAL,
+    ssid        TEXT,
+    bssid       TEXT
+);
+
 -- F005: deauthentication / disassociation frames (AP address only, no client addresses)
 CREATE TABLE IF NOT EXISTS events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -171,6 +180,7 @@ class Store:
         self.conn.executescript(SCHEMA)
         self._migrate()
         self._pending = 0
+        self._layouts_seen: set = set()
 
     def _migrate(self) -> None:
         """Add columns introduced after a database was created (older GhostAP versions)."""
@@ -190,6 +200,11 @@ class Store:
 
     def add(self, obs: dict) -> None:
         self.conn.execute(_INSERT, tuple(obs.get(f) for f in OBS_FIELDS))
+        fp = obs.get("fingerprint")
+        if fp and obs.get("layout") and fp not in self._layouts_seen:
+            self._layouts_seen.add(fp)
+            self.conn.execute("INSERT OR IGNORE INTO layouts VALUES (?, ?, ?, ?, ?)",
+                              (fp, json.dumps(obs["layout"]), obs.get("ts"), obs.get("ssid"), obs.get("bssid")))
         self._pending += 1
         if self._pending >= self.BATCH_SIZE:
             self.commit()

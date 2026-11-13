@@ -78,12 +78,12 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F025 | Bulk triage | D | done |
 | F026 | Snooze and mute rules | D | done |
 | F027 | Triage history | D | done |
-| F028 | Beacon difference viewer | D | todo |
-| F029 | Vendor names | D | todo |
-| F030 | Signal and uptime charts | D | todo |
+| F028 | Beacon difference viewer | D | done |
+| F029 | Vendor names | D | done |
+| F030 | Signal and uptime charts | D | done |
 | F031 | What-if weights | D | todo |
-| F032 | Evidence pcap download | D | todo |
-| F033 | Related access points | D | todo |
+| F032 | Evidence pcap download | D | done |
+| F033 | Related access points | D | done |
 | F034 | Network health card | C | done |
 | F035 | Network risk score | C | done |
 | F036 | Clock time and time ranges | D | todo |

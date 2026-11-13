@@ -8,7 +8,7 @@ Everything else is ignored.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from scapy.layers.dot11 import (
     Dot11, Dot11Beacon, Dot11Deauth, Dot11Disas, Dot11Elt, Dot11ProbeResp, RadioTap,
@@ -66,7 +66,18 @@ _CAP_MASK = 0xFFFF & ~(0x0010 | 0x0020 | 0x0400)
 
 
 def beacon_fingerprint(body) -> Optional[str]:
-    """Hash of how a beacon is *built*, not what network it advertises.
+    """Hash of how a beacon is *built*, not what network it advertises (see beacon_layout)."""
+    return fingerprint_of(beacon_layout(body))
+
+
+def fingerprint_of(layout: Optional[List[str]]) -> Optional[str]:
+    if layout is None:
+        return None
+    return hashlib.sha1("|".join(layout).encode(), usedforsecurity=False).hexdigest()[:12]
+
+
+def beacon_layout(body) -> Optional[List[str]]:
+    """How a beacon is *built*: the parts its fingerprint hashes (F028 shows them).
 
     Different AP models and AP software (vendor firmware, hostapd, phone hotspots)
     order and fill their information elements differently, so a twin running on
@@ -96,7 +107,7 @@ def beacon_fingerprint(body) -> Optional[str]:
             else:
                 parts.append(str(eid))                         # presence and order only
             elt = elt.payload
-        return hashlib.sha1("|".join(parts).encode(), usedforsecurity=False).hexdigest()[:12]
+        return parts
     except Exception:  # malformed elements: no fingerprint rather than a crash
         return None
 
@@ -260,6 +271,7 @@ def parse_frame(pkt, stats: Optional[dict] = None) -> Optional[dict]:
         if channel is None or band_of(freq) == "6":     # 6 GHz numbers overlap 2.4 GHz ones
             channel = channel_from_freq(freq) if freq else channel
         sc = dot11.SC
+        layout = beacon_layout(body)
         return {
             "ts": float(pkt.time),
             "frame_type": frame_type,
@@ -272,9 +284,10 @@ def parse_frame(pkt, stats: Optional[dict] = None) -> Optional[dict]:
             "beacon_interval": int(body.beacon_interval) if body.beacon_interval is not None else None,
             "tsf": int(body.timestamp) if body.timestamp is not None else None,
             "seq": (int(sc) >> 4) if sc is not None else None,
-            "fingerprint": beacon_fingerprint(body),
+            "fingerprint": fingerprint_of(layout),
             "rsn": parse_rsn(body),
             "freq": freq,
+            "layout": layout,          # not a column: stored once per fingerprint (F028)
         }
     except Exception:  # anything Scapy cannot make sense of: untrusted radio input
         return reject("malformed")

@@ -462,7 +462,7 @@
     const upAt = (x) => (x.uptime_first_seen == null ? null
       : x.first_seen <= ap.first_seen ? x.uptime_first_seen + (ap.first_seen - x.first_seen) : x.uptime_first_seen);
     const defs = [
-      ["Vendor (first half of address)", (x) => x.oui, (x) => x.oui],
+      ["Vendor (first half of address)", (x) => x.oui + (x.vendor && x.vendor.vendor ? " · " + x.vendor.vendor : x.vendor && x.vendor.local ? " · locally administered" : ""), (x) => x.oui],
       ["Channel", (x) => x.channels, (x) => x.channels],
       ["Security", (x) => x.securities, (x) => x.securities],
       ["Signal", (x) => (x.rssi_avg == null ? "–" : fmt(x.rssi_avg, 0) + " dBm"), null,
@@ -584,7 +584,8 @@
               ${ap.ssid !== "<hidden>" ? `<button class="btn small" data-accept-baseline title="It is ours: add it to ${esc(ap.ssid)}'s saved baseline so it stops alerting">Accept into baseline</button>` : ""}
               ${ap.allowlisted ? "" : '<button class="btn small" data-trust title="Add to the allow-list: not treated as new, but cloning it is still detected">Trust this AP</button>'}
               <select class="input small-select" data-mute aria-label="Mute this access point"><option value="">Mute…</option><option value="1">for 1 hour</option><option value="8">for 8 hours</option><option value="24">for 24 hours</option><option value="168">for a week</option></select>
-              <button class="btn small" data-export title="Download a Markdown write-up of this access point (for your report or notes)">Export report</button></span></div>
+              <button class="btn small" data-export title="Download a Markdown write-up of this access point (for your report or notes)">Export report</button>
+              <a class="btn small" data-evidence href="${esc(withSession(`/api/ap/evidence.pcap?ssid=${encodeURIComponent(ap.ssid)}&bssid=${encodeURIComponent(ap.bssid)}`))}" download title="Download this access point's beacons around the alert as a pcap (open in Wireshark)">Evidence pcap</a></span></div>
           <div class="why ${esc(level || "")}"><b>${esc(whatIs)}</b>
             ${hits.length ? `<span class="muted">${alert ? "At its peak (" + rel(alert.peak_ts) + ") the main reasons were:" : "What raised the score:"}</span><ul>${whyList}</ul>`
               : `<span class="muted">${inds.length ? "None of the eight checks found anything unusual about this access point." : "Scoring starts after the learning period."}</span>`}
@@ -605,7 +606,20 @@
           <div class="section-title"><h3>Risk of this access point over time</h3></div>
           <div id="ap-chart" class="chart"></div>
         </div>
-      </div>`;
+      </div>
+
+      <div class="two">
+        <div>
+          <div class="section-title"><h3>Signal and uptime</h3><span class="muted">compared with the network's other access points</span></div>
+          <div class="seg" role="group" aria-label="Series"><button class="seg-btn active" data-series="rssi" aria-pressed="true">Signal</button><button class="seg-btn" data-series="uptime" aria-pressed="false">Uptime</button><button class="seg-btn" data-series="rate" aria-pressed="false">Beacons/s</button></div>
+          <div id="ap-series" class="chart"></div>
+        </div>
+        <div>
+          <div class="section-title"><h3>Beacon structure</h3><span class="muted">element by element, against the closest known AP</span></div>
+          <div id="beacon-diff" class="bdiff"><p class="muted">Loading…</p></div>
+        </div>
+      </div>
+      <div id="related" class="related" hidden></div>`;
 
     if (alert) {
       const ruled = new Set(JSON.parse(store.get("ghostap-ruleout-" + alert.id) || "[]"));
@@ -634,6 +648,57 @@
     $("detail").innerHTML = html;
     drawApChart(d, alert);
     if (alert) loadHistory(alert.id);
+    loadApExtras(ap);
+  }
+
+  // ------------------------------------------------------------------ F028 F030 F033
+  async function loadApExtras(ap) {
+    const q = `ssid=${encodeURIComponent(ap.ssid)}&bssid=${encodeURIComponent(ap.bssid)}`;
+    const same = () => state.detail && state.detail.ap.bssid === ap.bssid && state.detail.ap.ssid === ap.ssid;
+    const [diff, series, related] = await Promise.all([
+      get("/api/ap/beacon_diff?" + q).catch(() => null),
+      get("/api/ap/series?" + q).catch(() => null),
+      get("/api/ap/related?" + q).catch(() => []),
+    ]);
+    if (!same()) return;
+    state.apSeries = series;
+    drawSeries();
+    const bd = $("beacon-diff");
+    if (bd) bd.innerHTML = !diff ? '<p class="muted">Not available.</p>' : !diff.available ? `<p class="muted">${esc(diff.reason)}</p>` : `
+      <p><b>${esc(diff.summary)}</b> <span class="muted">This AP <span class="mono">${esc(diff.fingerprint)}</span> vs. ${esc(diff.known.bssid)} <span class="mono">${esc(diff.known.fingerprint)}</span>${diff.known.in_baseline ? " (known while learning)" : ""}.</span></p>
+      <table class="bd-table"><thead><tr><th>Element</th><th>This AP</th><th>Known AP</th></tr></thead><tbody>
+      ${diff.rows.map((r) => `<tr class="bd-${r.op}"><td>${esc(r.name)}</td>
+        <td class="mono">${r.op === "only_known" ? '<span class="bd-tag">missing</span>' : esc(r.value || "✓")}</td>
+        <td class="mono">${r.op === "only_this" ? '<span class="bd-tag">not sent</span>' : esc(r.known_value || "✓")}</td></tr>`).join("")}
+      </tbody></table>
+      <p class="muted small">✓ = present (GhostAP compares only its position). Security and the network name are compared by other checks.</p>`;
+    const rel_ = $("related");
+    if (rel_ && related.length) {
+      rel_.hidden = false;
+      rel_.innerHTML = `<div class="section-title"><h3>Related access points</h3><span class="muted">possibly the same device or the same attack</span></div>
+        <ul class="rel-list">${related.map((r) => `<li><button class="linkish" data-inspect="${esc(r.ssid)}" data-bssid="${esc(r.bssid)}">${esc(ssidLabel(r.ssid))} <span class="mono">${esc(r.bssid)}</span></button>
+          <span class="muted">${r.reasons.map((x) => esc(x.text)).join(" · ")}</span></li>`).join("")}</ul>`;
+    }
+  }
+
+  function drawSeries() {
+    const s = state.apSeries, el = $("ap-series");
+    if (!el) return;
+    if (!s || !s.series.length) { el.innerHTML = '<div class="empty">No data.</div>'; return; }
+    const kind = state.seriesKind || "rssi";
+    const idx = { rssi: 1, rate: 2, uptime: 3 }[kind];
+    const pal = ["--s1", "--s2", "--s3", "--s4", "--s5"];
+    const traces = s.series.slice(0, 6).map((ser, i) => ({
+      x: ser.points.map((p) => p[0] - state.t0), y: ser.points.map((p) => (kind === "uptime" && p[idx] != null ? p[idx] / 3600 : p[idx])),
+      name: ser.bssid === s.focus ? "this AP" : esc(ser.bssid), mode: "lines", connectgaps: false,
+      line: { color: ser.bssid === s.focus ? css("--critical") : css(pal[(i - 1 + pal.length) % pal.length]), width: ser.bssid === s.focus ? 2.5 : 1.5 },
+      hovertemplate: (kind === "rssi" ? "%{y:.0f} dBm" : kind === "uptime" ? "%{y:.2f} h" : "%{y:.1f}/s") + "<extra>" + esc(ser.bssid) + "</extra>",
+    }));
+    Plotly.react(el, traces, baseLayout({
+      showlegend: true, legend: { orientation: "h", y: -0.28, x: 0, font: { color: css("--text-2"), size: 11 } },
+      margin: { l: 40, r: 10, t: 8, b: 64 },
+      yaxis: { title: { text: kind === "rssi" ? "dBm" : kind === "uptime" ? "hours since boot" : "beacons per second", font: { size: 11 } }, gridcolor: css("--grid"), zeroline: false, tickfont: { color: css("--muted") } },
+    }), PLOT_CFG);
   }
 
   /** F027: every status change and note on this alert, newest first. */
@@ -677,6 +742,26 @@
   // detail interactions (event delegation; survives re-render)
   $("detail").addEventListener("click", async (e) => {
     if (e.target.closest("[data-export]") && state.detail) { exportReport(state.detail); return; }
+    const sb = e.target.closest("[data-series]");
+    if (sb) {
+      state.seriesKind = sb.dataset.series;
+      sb.parentElement.querySelectorAll(".seg-btn").forEach((b) => { b.classList.toggle("active", b === sb); b.setAttribute("aria-pressed", b === sb); });
+      drawSeries();
+      return;
+    }
+    const ev = e.target.closest("[data-evidence]");
+    if (ev) {
+      e.preventDefault();
+      const r = await fetch(ev.href, { credentials: "same-origin" });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); notice(j.error || "No evidence available", "error"); return; }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url; a.download = (r.headers.get("Content-Disposition") || "").match(/filename="([^"]+)"/)?.[1] || "evidence.pcap";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      notice(`Saved ${r.headers.get("X-GhostAP-Frames") || "the"} beacons. Open the file in Wireshark.`, "ok");
+      return;
+    }
     if (e.target.closest("[data-accept-baseline]") && state.detail) {
       const a = state.detail.ap;
       const r = await post("/api/monitored/accept", { ssid: a.ssid, bssid: a.bssid });
@@ -810,7 +895,7 @@
   // ------------------------------------------------------------------ AP table
   function renderTable() {
     const q = state.search.trim().toLowerCase();
-    let rows = state.aps.filter((a) => !q || [a.ssid, a.bssid, a.securities, a.channels, a.level].join(" ").toLowerCase().includes(q));
+    let rows = state.aps.filter((a) => !q || [a.ssid, a.bssid, a.vendor, a.securities, a.channels, a.level].join(" ").toLowerCase().includes(q));
     const { key, dir } = state.sort;
     rows = rows.slice().sort((a, b) => {
       const x = a[key], y = b[key];
@@ -822,7 +907,7 @@
     $("ap-rows").innerHTML = rows.length ? rows.map((p) => `
       <tr class="${isSel(p) ? "selected" : ""}" data-ssid="${esc(p.ssid)}" data-bssid="${esc(p.bssid)}" tabindex="0">
         <td><span class="swatch" style="background:${colorFor(keyOf(p))}"></span>${esc(p.ssid)}${p.in_baseline ? "" : ' <span class="tag new">new</span>'}</td>
-        <td class="mono">${esc(p.bssid)}</td>
+        <td class="mono">${esc(p.bssid)}<span class="vendor">${esc(p.vendor || (p.local_mac ? "locally administered" : ""))}</span></td>
         <td class="num">${esc(p.channels)}</td>
         <td>${esc(p.securities)}</td>
         <td class="num">${fmt(p.rssi_avg, 0)} dBm</td>

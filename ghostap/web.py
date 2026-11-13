@@ -38,6 +38,7 @@ from .pipeline import Pipeline
 from .sessions import SessionError, SessionStore
 from .config import ConfigError, load_config
 from .storage import Store
+from . import vendors
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 ATTACK_DETECTORS = "ghostap,deauth,flood"
@@ -295,6 +296,7 @@ def create_app(db: str, config: Optional[dict] = None,
             q).fetchone()
         return dict(profile,
                     oui=profile["bssid"][:8],
+                    vendor=vendors.lookup(profile["bssid"]),
                     uptime_first_seen=(first["tsf"] / 1e6) if first else None,
                     uptime_now=(last["tsf"] / 1e6) if last else None,
                     fingerprints=fps,
@@ -316,6 +318,8 @@ def create_app(db: str, config: Optional[dict] = None,
             key = (p["ssid"], p["bssid"])
             cur, al = latest.get(key), alerts_by.get(key)
             out.append(dict(p,
+                            vendor=vendors.name(p["bssid"]),
+                            local_mac=vendors.is_local(p["bssid"]),
                             score=cur["score"] if cur else None,
                             level=cur["level"] if cur else None,
                             peak_score=peak.get(key),
@@ -418,6 +422,8 @@ def create_app(db: str, config: Optional[dict] = None,
     web_admin.register(app, ctx)
     from . import web_monitored
     web_monitored.register(app, ctx)
+    from . import web_ap
+    web_ap.register(app, ctx)
 
     @app.get("/api/timeline")
     def timeline():
