@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Sign in · GhostAP</title>
+  <link rel="icon" href="/static/icons/ghostap-192.png">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-page">
+  <main class="login-card card" aria-labelledby="login-title">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c-6 0-10 4.5-10 10.5V28l3.3-2.5L12.7 28 16 25.5 19.3 28l3.4-2.5L26 28V13.5C26 7.5 22 3 16 3z"/><circle cx="12.5" cy="14" r="2"/><circle cx="19.5" cy="14" r="2"/></svg>
+      <div><h1 id="login-title">GhostAP</h1><span class="tagline">Passive Evil Twin detector</span></div>
+    </div>
+    <p id="login-intro" class="muted">Checking how to sign in…</p>
+    <div id="login-error" class="banner error" role="alert" hidden></div>
+
+    <form id="account-form" hidden autocomplete="on">
+      <label for="username">User name</label>
+      <input class="input" id="username" name="username" autocomplete="username" required maxlength="40" autocapitalize="none" spellcheck="false">
+      <label for="password">Password</label>
+      <input class="input" id="password" name="password" type="password" autocomplete="current-password" required maxlength="200">
+      <div id="code-row" hidden>
+        <label for="code">Code from your authenticator app (or a recovery code)</label>
+        <input class="input" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="12" spellcheck="false">
+      </div>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+
+    <form id="token-form" hidden autocomplete="off">
+      <label for="token">Access link or token</label>
+      <input class="input" id="token" required spellcheck="false" placeholder="http://…/?token=…">
+      <p class="muted small">GhostAP printed this link in the terminal when it started. It is the key to this dashboard: keep it private.</p>
+      <button class="btn primary" type="submit">Open the dashboard</button>
+    </form>
+
+    <p class="muted small login-foot">GhostAP only listens to Wi-Fi beacons and never transmits. Use it only on networks you own or are authorised to monitor.</p>
+    <p class="muted small" id="tls-note" hidden>This connection is not encrypted (http). Start GhostAP with <span class="mono">--https</span> when it is reachable from the network.</p>
+  </main>
+  <script src="/static/login.js"></script>
+</body>
+</html>

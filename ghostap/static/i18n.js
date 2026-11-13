@@ -6,7 +6,7 @@
   const DICT = {
     hi: {
       "nav.dashboard": "डैशबोर्ड", "nav.monitored": "निगरानी वाले नेटवर्क", "nav.sessions": "सत्र",
-      "nav.system": "सिस्टम", "nav.whatif": "क्या-अगर",
+      "nav.system": "सिस्टम", "nav.whatif": "क्या-अगर", "nav.account": "खाता",
       "tagline": "निष्क्रिय ईविल ट्विन डिटेक्टर",
       "verdict.connecting": "GhostAP से जुड़ रहे हैं…",
       "verdict.error": "लाइव कैप्चर शुरू नहीं हो सका",
@@ -27,7 +27,7 @@
     },
     te: {
       "nav.dashboard": "డ్యాష్‌బోర్డ్", "nav.monitored": "పర్యవేక్షించే నెట్‌వర్క్‌లు", "nav.sessions": "సెషన్‌లు",
-      "nav.system": "సిస్టమ్", "nav.whatif": "ఒకవేళ ఇలా అయితే",
+      "nav.system": "సిస్టమ్", "nav.whatif": "ఒకవేళ ఇలా అయితే", "nav.account": "ఖాతా",
       "tagline": "నిష్క్రియ ఈవిల్ ట్విన్ డిటెక్టర్",
       "verdict.connecting": "GhostAP కి కనెక్ట్ అవుతోంది…",
       "verdict.error": "లైవ్ క్యాప్చర్ ప్రారంభం కాలేదు",

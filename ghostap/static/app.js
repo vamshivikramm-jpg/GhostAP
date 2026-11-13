@@ -1373,9 +1373,9 @@
     $("verdict-icon").innerHTML = ICONS.error;
     $("verdict-title").textContent = auth ? "Sign-in needed" : "Lost connection to the GhostAP server";
     $("verdict-sub").textContent = auth
-      ? "This dashboard is reachable from the network, so it needs its access link. Open the link GhostAP printed in the terminal when it started (it ends in /?token=…)."
+      ? "Your sign-in ended (signed out, expired after 12 hours without activity, or revoked)."
       : "The data below is from the last successful update. Is GhostAP still running? Retrying every 5 seconds.";
-    $("verdict-actions").innerHTML = '<button class="btn" data-retry>Retry now</button>';
+    $("verdict-actions").innerHTML = auth ? '<a class="btn primary" href="/">Sign in</a>' : '<button class="btn" data-retry>Retry now</button>';
     $("baseline-progress").hidden = true;
   }
   function schedule(ms) { clearTimeout(timer); timer = setTimeout(() => refresh(false), ms); }
@@ -1498,6 +1498,16 @@
     register(name, view) { views[name] = view; renderNav(); if (viewFromHash() === name) route(); },
   };
   applyAppearance();
+  // F065: who is signed in; viewers get a read-only page (the server enforces it anyway)
+  get("/api/me").then((m) => {
+    state.me = m;
+    document.body.classList.toggle("role-viewer", m.role === "viewer");
+    const chip = $("user-chip");
+    if (m.kind === "user" || m.kind === "viewer") {
+      chip.hidden = false;
+      chip.innerHTML = `<a href="#account" class="nav-link" title="Account, two-factor sign-in, signed-in devices">${esc(m.kind === "viewer" ? "read-only view" : m.name)} <span class="muted">${esc(m.role)}</span></a>`;
+    }
+  }).catch(() => {});
   // F082 language picker
   if (window.GA_I18N) {
     $("lang-select").innerHTML = window.GA_I18N.langs.map(([k, n]) => `<option value="${k}" ${k === window.GA_I18N.lang ? "selected" : ""}>${esc(n)}</option>`).join("");

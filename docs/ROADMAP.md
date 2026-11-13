@@ -112,12 +112,12 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F059 | SIEM and syslog export | E | done |
 | F060 | Grafana metrics | E | done |
 | F061 | Documented API with keys | E | done |
-| F062 | Better sign-in page | F | todo |
-| F063 | Read-only viewer link | F | todo |
-| F064 | HTTPS mode | F | todo |
-| F065 | Analyst accounts and roles | F | todo |
-| F066 | Two-factor sign-in | F | todo |
-| F067 | Session management | F | todo |
+| F062 | Better sign-in page | F | done |
+| F063 | Read-only viewer link | F | done |
+| F064 | HTTPS mode | F | done |
+| F065 | Analyst accounts and roles | F | done |
+| F066 | Two-factor sign-in | F | done |
+| F067 | Session management | F | done |
 | F068 | System health page | A | done |
 | F069 | Audit log | A | done |
 | F070 | Data retention | A | done |

@@ -32,13 +32,13 @@ from collections import defaultdict
 from types import SimpleNamespace
 from typing import List, Optional
 
-from flask import Flask, Response, abort, jsonify, redirect, request, send_file, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
 from .pipeline import Pipeline
 from .sessions import SessionError, SessionStore
 from .config import ConfigError, load_config
 from .storage import Store
-from . import apikeys, vendors
+from . import vendors
 
 STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 ATTACK_DETECTORS = "ghostap,deauth,flood"
@@ -53,13 +53,6 @@ TOKEN_COOKIE = "ghostap_token"  # noqa: S105 - the cookie's name, not a secret
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
        "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; "
        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
-LOGIN_PAGE = """<!doctype html><html lang="en"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>GhostAP: sign in</title>
-<body style="font:15px/1.5 system-ui,sans-serif;max-width:560px;margin:12vh auto;padding:0 16px;color:#222">
-<h1 style="font-size:20px">GhostAP dashboard</h1>
-<p>This dashboard is reachable from the network, so it needs its access link.</p>
-<p>Open the link that GhostAP printed in the terminal when it started; it ends in
-<code>/?token=...</code>.</p></body></html>"""
 
 
 def _int_arg(name: str, default: int, lo: int, hi: int) -> int:
@@ -133,33 +126,14 @@ def create_app(db: str, config: Optional[dict] = None,
     def token_ok(value: Optional[str]) -> bool:
         return bool(value) and hmac.compare_digest(value.encode(), token.encode())
 
+    gate_box: list = []                    # the Gate needs ctx, which is built below
+
     @app.before_request
     def guard():
         if local_only and not is_loopback(_request_hostname()):
             return Response("GhostAP only answers requests addressed to localhost.\n",
                             status=403, mimetype="text/plain")
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer " + apikeys.PREFIX):          # F061: scripts and tools
-            row = apikeys.check(ctx.admin_db, auth[7:].strip())
-            if row is None:
-                return jsonify({"error": "unknown or revoked API key"}), 401
-            if row["scope"] == "read" and request.method not in ("GET", "HEAD"):
-                return jsonify({"error": "this API key is read-only"}), 403
-            request.environ["ghostap.api_key"] = row
-            return None
-        if token:
-            if request.path == "/" and token_ok(request.args.get("token")):
-                resp = redirect("/", code=303)                 # drop the token from the URL bar
-                resp.set_cookie(TOKEN_COOKIE, token, httponly=True, samesite="Strict",
-                                max_age=12 * 3600, secure=request.is_secure)
-                return resp
-            auth = request.headers.get("Authorization", "")
-            supplied = auth[7:] if auth.startswith("Bearer ") else request.cookies.get(TOKEN_COOKIE)
-            if not token_ok(supplied):
-                if request.path.startswith("/api/"):
-                    return jsonify({"error": "authentication required"}), 401
-                return Response(LOGIN_PAGE, status=401, mimetype="text/html")
-        return None
+        return gate_box[0].check()            # API key, viewer link, account, token or local (web_auth)
 
     @app.after_request
     def security_headers(resp):
@@ -207,9 +181,9 @@ def create_app(db: str, config: Optional[dict] = None,
         return st
 
     def actor() -> str:
-        key = request.environ.get("ghostap.api_key") if request else None
-        if key:
-            return "key:" + key["name"]
+        p = request.environ.get("ghostap.principal") if request else None
+        if p:
+            return p["name"]
         return "token" if token else "local"
 
     def json_body():
@@ -227,14 +201,22 @@ def create_app(db: str, config: Optional[dict] = None,
         with Store(ctx.admin_db) as s:
             s.audit(actor(), action, target, detail)
 
+    def audit_as(who: str, action: str, target: Optional[str] = None, detail: Optional[dict] = None) -> None:
+        with Store(ctx.admin_db) as s:
+            s.audit(who, action, target, detail)
+
     ctx = SimpleNamespace(cfg=cfg, db=db, pipeline=pipeline, sessions=sessions, started=started,
                           current_session=current_session, admin_db=admin_db or db,
                           store=store, status=status, db_path=db_path, actor=actor,
-                          json_body=json_body, audit=audit, viewed_session=viewed_session,
+                          json_body=json_body, audit=audit, audit_as=audit_as, viewed_session=viewed_session,
                           active_mutes=active_mutes,
                           config_path=config_path,
                           monitored_path=monitored_path or cfg.get("monitored_networks") or "data/monitored.json")
     app.extensions["ghostap"] = ctx
+    from . import web_auth
+    gate_box.append(web_auth.Gate(ctx, token, token_ok, TOKEN_COOKIE, STATIC))
+    ctx.gate = gate_box[0]
+    web_auth.register(app, ctx, gate_box[0])
 
     # -- pages -------------------------------------------------------------- #
 
@@ -572,7 +554,27 @@ def main(argv=None) -> int:
                     help="address to listen on (default 127.0.0.1). Anything else, e.g. 0.0.0.0 "
                          "to reach Kali in a VM from the host, turns on token login")
     ap.add_argument("--port", type=int, default=8050)
+    tls = ap.add_mutually_exclusive_group()
+    tls.add_argument("--https", action="store_true",
+                     help="serve over HTTPS with a self-signed certificate (made once in data/tls/)")
+    tls.add_argument("--tls-cert", metavar="PEM", help="serve over HTTPS with this certificate (needs --tls-key)")
+    ap.add_argument("--tls-key", metavar="PEM", help="private key for --tls-cert")
     args = ap.parse_args(argv)
+    if bool(args.tls_cert) != bool(args.tls_key):
+        ap.error("--tls-cert and --tls-key go together")
+    tls_pair = None
+    if args.https or args.tls_cert:
+        from . import tls as tls_mod
+        try:
+            tls_pair = (args.tls_cert, args.tls_key) if args.tls_cert else tls_mod.self_signed([args.host])
+            tls_mod.check_pair(*tls_pair)
+            print("[+] HTTPS certificate {} (SHA-256 {})".format(tls_pair[0], tls_mod.fingerprint(tls_pair[0])))
+            if args.https:
+                print("[i] self-signed: the browser warns once; accept it only if it shows the same fingerprint")
+        except tls_mod.TLSError as e:
+            print("[!] HTTPS: {}".format(e), file=sys.stderr)
+            return 2
+    scheme = "https" if tls_pair else "http"
 
     if args.pcap and not os.path.exists(args.pcap):
         print("[!] pcap not found: {}".format(args.pcap), file=sys.stderr)
@@ -655,8 +657,8 @@ def main(argv=None) -> int:
     if monitored:
         print("[+] using saved baseline for {} network(s): scoring starts immediately".format(len(monitored)))
     if local:
-        print("[+] GhostAP dashboard ({}: {}) -> http://{}:{}".format(
-            mode, pipe.status["source"], "127.0.0.1" if args.host in ("localhost", "::1") else args.host,
+        print("[+] GhostAP dashboard ({}: {}) -> {}://{}:{}".format(
+            mode, pipe.status["source"], scheme, "127.0.0.1" if args.host in ("localhost", "::1") else args.host,
             args.port))
     else:
         wildcard = args.host in ("0.0.0.0", "::")  # noqa: S104 - checking, not binding
@@ -664,10 +666,12 @@ def main(argv=None) -> int:
         print("[+] GhostAP dashboard ({}: {}) is reachable from the network.".format(
             mode, pipe.status["source"]))
         print("[+] Open this link (keep it private, it is the login):")
-        print("      http://{}:{}/?token={}".format(shown, args.port, token))
+        print("      {}://{}:{}/?token={}".format(scheme, shown, args.port, token))
+        if not tls_pair:
+            print("[i] add --https so the link and everything else is encrypted on the network")
         print("[i] Anyone with the link can see the dashboard. Use it only on a private or lab network.")
     try:
-        serve(app, args.host, args.port)
+        serve(app, args.host, args.port, tls_pair)
     except OSError as e:
         print("[!] could not listen on {}:{}: {} (port in use? try --port 8051)".format(
             args.host, args.port, e), file=sys.stderr)
@@ -680,8 +684,22 @@ def main(argv=None) -> int:
     return 0
 
 
-def serve(app: Flask, host: str, port: int) -> None:
-    """Production WSGI server (waitress) when installed, else Flask's built-in server."""
+def serve(app: Flask, host: str, port: int, tls_pair=None) -> None:
+    """Production WSGI server: cheroot for HTTPS (F064), waitress for HTTP, else Flask's
+    built-in server."""
+    if tls_pair:
+        try:
+            from cheroot import wsgi
+            from cheroot.ssl.builtin import BuiltinSSLAdapter
+        except ImportError:
+            raise OSError("HTTPS needs cheroot: pip install -r requirements.txt") from None
+        server = wsgi.Server((host, port), app, numthreads=8, server_name="GhostAP")
+        server.ssl_adapter = BuiltinSSLAdapter(*tls_pair)
+        try:
+            server.start()
+        finally:
+            server.stop()
+        return
     try:
         from waitress import serve as waitress_serve
     except ImportError:
