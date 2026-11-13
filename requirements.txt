@@ -5,6 +5,7 @@ waitress>=3.0,<4       # production WSGI server for the dashboard
 plotly>=5.18,<8        # ships plotly.min.js, served locally (no CDN)
 pyyaml>=6.0,<7         # config.yaml
 matplotlib>=3.7,<4     # evaluation charts (results/*.png)
+pillow>=13.0           # used by matplotlib; versions before 13.0 have known CVEs
 
 # Development
 pytest>=7.4

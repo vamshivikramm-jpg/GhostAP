@@ -339,7 +339,7 @@ the previous round.
 ### 4.9 Testing
 
 The project has 82 automated tests (`pytest`). GitHub Actions runs them on every push
-(Python 3.10 and 3.12), together with a linter that includes security rules (ruff) and a
+(Python 3.11, 3.12 and 3.13), together with a linter that includes security rules (ruff) and a
 dependency vulnerability scan (pip-audit). The tests cover:
 
 - parsing of crafted WPA2, open, hidden-SSID and data frames;

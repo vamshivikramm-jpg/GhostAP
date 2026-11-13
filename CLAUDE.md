@@ -47,7 +47,7 @@ ghostap/evaluate.py     metrics, threshold sweep, charts (also ./evaluate.py)
 tools/                  make_test_pcap.py, make_eval_set.py (11 scenarios), label_capture.py,
                         demo.py, kali_monitor.sh, make_architecture_figure.py
 config.yaml             weights, thresholds, timing, known_bssids allow-list
-tests/                  pytest (82 tests); CI: .github/workflows/tests.yml (Py 3.10 + 3.12:
+tests/                  pytest (82 tests); CI: .github/workflows/tests.yml (Py 3.11, 3.12, 3.13:
                         ruff lint incl. security rules, pip-audit, tests, evaluation smoke test)
 pyproject.toml          ruff + pytest config (lint: `ruff check .`)
 ```
@@ -81,7 +81,8 @@ python evaluate.py --dataset data/lab --out results/lab [--unlabelled ignore]
 
 ## Conventions
 
-- Python 3.10+ (developed on 3.12). Keep `from __future__ import annotations`; no 3.11+-only APIs.
+- Python 3.11+ (developed on 3.12; Kali ships 3.13). 3.10 was dropped because the
+  Pillow release with current security fixes (13.0) no longer supports it.
 - Everything shown in the dashboard that came from the air (SSIDs, reasons, notes) goes
   through `esc()` in app.js, including Plotly legend names. The triage endpoint accepts
   JSON only (this blocks cross-site form posts). Keep both.

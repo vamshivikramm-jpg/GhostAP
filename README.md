@@ -58,7 +58,7 @@ runbook with likely questions is in [docs/DEMO.md](docs/DEMO.md).
 
 ## Setup
 
-Requires Python 3.10+ (developed on 3.12; on macOS: `brew install python@3.12`).
+Requires Python 3.11+ (tested on 3.11, 3.12 and 3.13; on macOS: `brew install python@3.12`).
 
 ```bash
 python3.12 -m venv .venv
