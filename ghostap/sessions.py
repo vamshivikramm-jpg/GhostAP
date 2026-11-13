@@ -153,3 +153,126 @@ def _headline(db: str) -> dict:
         return {"frames": 0, "aps": 0, "alerts_high": 0, "alerts_medium": 0}
     return {"frames": frames, "aps": aps, "capture_start": t0, "capture_end": t1,
             "alerts_high": levels.get("HIGH", 0), "alerts_medium": levels.get("MEDIUM", 0)}
+
+
+# --------------------------------------------------------------------------- F054 bundles
+BUNDLE_FILES = ("session.db", "meta.json", "capture.pcap", "labels.json")
+MAX_BUNDLE_BYTES = 2 * 1024 ** 3
+
+
+def export_bundle(session: Session, dest) -> dict:
+    """Write a zip of the session to `dest` (path or file object): a consistent copy of the
+    database (SQLite backup API, safe while capturing), meta, pcap and labels, plus
+    manifest.json with a SHA-256 of every file."""
+    import hashlib
+    import sqlite3
+    import tempfile
+    import zipfile
+    manifest = {"format": "ghostap-session-bundle", "version": 1, "session": session.id,
+                "created_at": time.time(), "files": {}}
+    with tempfile.TemporaryDirectory() as tmp:
+        snap = os.path.join(tmp, "session.db")
+        if os.path.isfile(session.db):
+            src = sqlite3.connect("file:{}?mode=ro".format(session.db), uri=True)
+            dst = sqlite3.connect(snap)
+            with dst:
+                src.backup(dst)
+            src.close()
+            dst.close()
+        with zipfile.ZipFile(dest, "w", compression=zipfile.ZIP_DEFLATED) as z:
+            for name in BUNDLE_FILES:
+                path = snap if name == "session.db" else os.path.join(session.path, name)
+                if not os.path.isfile(path):
+                    continue
+                h = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+                manifest["files"][name] = {"sha256": h.hexdigest(), "bytes": os.path.getsize(path)}
+                z.write(path, arcname=name)
+            z.writestr("manifest.json", json.dumps(manifest, indent=2))
+    return manifest
+
+
+def import_bundle(store: "SessionStore", path: str) -> Session:
+    """Unpack a bundle as a new session. Only the known file names are accepted (no paths,
+    so nothing can be written outside the new folder) and every checksum must match."""
+    import hashlib
+    import zipfile
+    with zipfile.ZipFile(path) as z:
+        names = set(z.namelist())
+        if "manifest.json" not in names or "session.db" not in names:
+            raise SessionError("not a GhostAP session bundle (manifest.json or session.db missing)")
+        extra = names - set(BUNDLE_FILES) - {"manifest.json"}
+        if extra:
+            raise SessionError("unexpected files in the bundle: " + ", ".join(sorted(extra))[:200])
+        if sum(i.file_size for i in z.infolist()) > MAX_BUNDLE_BYTES:
+            raise SessionError("the bundle is larger than 2 GB")
+        manifest = json.loads(z.read("manifest.json"))
+        if manifest.get("format") != "ghostap-session-bundle":
+            raise SessionError("not a GhostAP session bundle")
+        try:
+            meta = json.loads(z.read("meta.json")) if "meta.json" in names else {}
+        except ValueError:
+            meta = {}
+        s = store.create("{} (imported)".format(str(meta.get("name") or manifest.get("session") or "bundle")[:100]),
+                         meta.get("mode", "imported"), meta.get("source", ""))
+        try:
+            for name in BUNDLE_FILES:
+                if name not in names or name == "meta.json":
+                    continue
+                want = (manifest.get("files") or {}).get(name, {}).get("sha256")
+                h = hashlib.sha256()
+                with z.open(name) as src, open(os.path.join(s.path, name), "wb") as dst:
+                    for chunk in iter(lambda: src.read(1 << 20), b""):
+                        h.update(chunk)
+                        dst.write(chunk)
+                if not want or h.hexdigest() != want:
+                    raise SessionError("{} does not match its checksum: the bundle is damaged".format(name))
+        except Exception:
+            shutil.rmtree(s.path, ignore_errors=True)
+            raise
+        keep = {k: meta[k] for k in ("started_at", "ended_at", "frames", "state") if k in meta}
+        s.update_meta(imported_from=manifest.get("session"), imported_at=time.time(), **keep)
+        return s
+
+
+def main(argv=None) -> int:
+    import argparse
+    import sys
+    from .config import ConfigError, load_config
+    ap = argparse.ArgumentParser(prog="python -m ghostap.sessions", description="List, export or import sessions.")
+    ap.add_argument("--config", default="config.yaml")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("list")
+    e = sub.add_parser("export")
+    e.add_argument("id")
+    e.add_argument("out", help="zip file to write")
+    i = sub.add_parser("import")
+    i.add_argument("bundle")
+    args = ap.parse_args(argv)
+    try:
+        store = SessionStore(load_config(args.config)["sessions_dir"])
+    except ConfigError as err:
+        print("[!] settings problem: {}".format(err), file=sys.stderr)
+        return 2
+    try:
+        if args.cmd == "list":
+            for m in store.list():
+                print("{:<48} {:<8} {:>8} frames  {} HIGH / {} MEDIUM".format(
+                    m["id"], m.get("mode", ""), m.get("frames", 0), m.get("alerts_high", 0), m.get("alerts_medium", 0)))
+        elif args.cmd == "export":
+            man = export_bundle(store.get(args.id), args.out)
+            print("[+] wrote {} ({})".format(args.out, ", ".join(man["files"])))
+        else:
+            s = import_bundle(store, args.bundle)
+            print("[+] imported as session {}".format(s.id))
+    except (SessionError, OSError, ValueError) as err:
+        print("[!] {}".format(err), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.exit(main())

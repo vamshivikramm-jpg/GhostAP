@@ -96,15 +96,15 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F043 | Smart channel hopping | B | done |
 | F044 | Several sensors | J | todo |
 | F045 | Rough location | J | todo |
-| F046 | Labelling page | G | todo |
-| F047 | Evaluation page | G | todo |
-| F048 | Confidence intervals and test splits | G | todo |
-| F049 | ROC and precision-recall curves | G | todo |
-| F050 | Kismet as a second baseline | G | todo |
-| F051 | Scenario builder | G | todo |
-| F052 | Session incident report | G | todo |
-| F053 | Keep report numbers in sync | G | todo |
-| F054 | Session bundle | G | todo |
+| F046 | Labelling page | G | done |
+| F047 | Evaluation page | G | done |
+| F048 | Confidence intervals and test splits | G | done |
+| F049 | ROC and precision-recall curves | G | done |
+| F050 | Kismet as a second baseline | G | done* (Kismet not installed here: reader follows Kismet's documented log schema; confirm on Kali) |
+| F051 | Scenario builder | G | done |
+| F052 | Session incident report | G | done |
+| F053 | Keep report numbers in sync | G | done |
+| F054 | Session bundle | G | done |
 | F055 | Desktop notifications | E | done |
 | F056 | Webhooks | E | done* (tested against a local HTTP receiver) |
 | F057 | Phone push | E | done* (ntfy / Telegram formats tested locally; real delivery needs your topic or bot token) |
@@ -134,11 +134,11 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F081 | Install as an app | D | done |
 | F082 | Languages | D | done* (framework + main screen; Hindi and Telugu are drafts that need a native speaker's review) |
 | F083 | Shareable views | D | done |
-| F084 | Learned weights | G | todo |
-| F085 | Anomaly model | G | todo |
+| F084 | Learned weights | G | done* (runs on the synthetic set; meaningful only with Phase 2 captures) |
+| F085 | Anomaly model | G | done* (same: synthetic until Phase 2) |
 | F086 | AI alert explainer (opt-in) | I | todo |
 | F087 | Ask GhostAP (opt-in) | I | todo |
-| F088 | Labelling assistant | G | todo |
+| F088 | Labelling assistant | G | done |
 | F089 | Demo button | D | done |
 | F090 | Presentation mode | D | done |
 | F091 | Dashboard screenshot for the report | D | done |

@@ -604,3 +604,9 @@ tr.dismissed td { opacity: .55; }
 body.role-viewer .row-actions, body.role-viewer .triage, body.role-viewer .bulk, body.role-viewer .item-row > input,
 body.role-viewer .note-form, body.role-viewer .icon-x, body.role-viewer [data-mute], body.role-viewer [data-accept-baseline],
 body.role-viewer [data-trust], body.role-viewer .checklist input { display: none !important; }
+
+/* Phase G pages */
+.ds-list { display: grid; gap: 6px; }
+.ds { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+.ds.on { border-color: var(--accent); background: var(--accent-soft); }
+.ds input { margin-top: 4px; accent-color: var(--accent); }

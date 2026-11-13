@@ -36,7 +36,9 @@
       <td class="num">${s.alerts_high ? G.lvl("HIGH") + " " + s.alerts_high : ""} ${s.alerts_medium ? G.lvl("MEDIUM") + " " + s.alerts_medium : ""}${!s.alerts_high && !s.alerts_medium ? '<span class="muted">none</span>' : ""}</td>
       <td class="num">${size(s.size_bytes || 0)}${s.has_pcap ? ' <span class="tag" title="Recorded beacons are kept with this session">pcap</span>' : ""}</td>
       <td><span class="row-actions">${viewing ? "" : `<button class="btn small primary" data-open="${esc(s.id)}" data-name="${esc(s.name)}" data-current="${s.current ? 1 : ""}">Open</button>`}
-        <button class="btn small" data-rename="${esc(s.id)}">Rename</button>${del}</span></td></tr>`;
+        <button class="btn small" data-rename="${esc(s.id)}">Rename</button>
+        <a class="btn small" href="/api/report.html?session=${encodeURIComponent(s.id)}" target="_blank" rel="noopener" title="Printable incident report (save as PDF from the browser)">Report</a>
+        <a class="btn small" href="/api/sessions/${encodeURIComponent(s.id)}/bundle.zip" download title="Zip of the database, recording and labels (import with python -m ghostap.sessions import)">Download</a>${del}</span></td></tr>`;
   }
 
   function compareTable() {

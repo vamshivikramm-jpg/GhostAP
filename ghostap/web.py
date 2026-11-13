@@ -454,6 +454,8 @@ def create_app(db: str, config: Optional[dict] = None,
     web_demo.register(app, ctx)
     from . import web_integrations
     web_integrations.register(app, ctx)
+    from . import web_lab
+    web_lab.register(app, ctx)
 
     @app.get("/api/timeline")
     def timeline():

@@ -185,20 +185,27 @@ def labels_for(name, desc, aps):
             "capture_start": BASE_TIME, "duration_s": DURATION, "aps": out}
 
 
-def generate(out_dir="data/eval"):
+def write_scenario(out_dir, name, desc, aps, seed, extra_labels=None):
+    """Render one scenario to <name>.pcap + <name>.labels.json; returns the frame count."""
     os.makedirs(out_dir, exist_ok=True)
+    frames = render(aps, seed=seed)
+    pcap = os.path.join(out_dir, name + ".pcap")
+    with PcapWriter(pcap, linktype=127, sync=False) as w:
+        w.write_header(None)          # write_packet() alone does not emit the file header
+        for ts, raw in frames:
+            sec = int(ts)
+            w.write_packet(raw, sec=sec, usec=int(round((ts - sec) * 1e6)))
+    labels = labels_for(name, desc, aps)
+    labels.update(extra_labels or {})
+    with open(os.path.join(out_dir, name + ".labels.json"), "w") as f:
+        json.dump(labels, f, indent=2)
+    return len(frames)
+
+
+def generate(out_dir="data/eval"):
     written = []
     for i, (name, (desc, aps)) in enumerate(sorted(SCENARIOS.items())):
-        frames = render(aps, seed=100 + i)
-        pcap = os.path.join(out_dir, name + ".pcap")
-        with PcapWriter(pcap, linktype=127, sync=False) as w:
-            w.write_header(None)          # write_packet() alone does not emit the file header
-            for ts, raw in frames:
-                sec = int(ts)
-                w.write_packet(raw, sec=sec, usec=int(round((ts - sec) * 1e6)))
-        with open(os.path.join(out_dir, name + ".labels.json"), "w") as f:
-            json.dump(labels_for(name, desc, aps), f, indent=2)
-        written.append((name, len(frames)))
+        written.append((name, write_scenario(out_dir, name, desc, aps, seed=100 + i)))
     return written
 
 

@@ -91,8 +91,21 @@ def run_capture(name: str, pcap: str, labels_path: str, cfg: dict,
             obs = store.observations()
 
     an = analyzer_for(cfg, obs)
-    timeline = RiskEngine(an, cfg).run().timeline
+    engine = RiskEngine(an, cfg)
+    engine.record = []                       # indicator values per step, for --extended (F084, F085)
+    timeline = engine.run().timeline
+    ind_max: Dict[Tuple[str, str], Dict[str, float]] = {}
+    for _, key, res in engine.record:
+        if res:
+            m = ind_max.setdefault(key, {})
+            for r in res:
+                m[r.name] = max(m.get(r.name, 0.0), float(r.value))
     base_first = {(a["ssid"], a["bssid"]): a["first_ts"] for a in duplicate_ssid_detector(obs)}
+    kismet_path = os.path.splitext(pcap)[0] + ".kismet"      # F050: Kismet's log of the same capture
+    kismet_first = None
+    if os.path.exists(kismet_path):
+        from .kismet import first_alerts
+        kismet_first = first_alerts(kismet_path)
 
     series: Dict[Tuple[str, str], List[dict]] = {}
     for r in timeline:
@@ -120,6 +133,9 @@ def run_capture(name: str, pcap: str, labels_path: str, cfg: dict,
             "ghostap_peak": max((r["score"] for r in tl), default=0.0),
             "ghostap_series": [(r["ts"], r["score"]) for r in tl],
             "baseline_first": base_first.get((ssid, bssid)),
+            "indicators": ind_max.get((ssid, bssid), {}),
+            "kismet_first": None if kismet_first is None else kismet_first.get(bssid),
+            "kismet_available": kismet_first is not None,
         })
     for r in timeline:
         r["scenario"] = name
@@ -136,6 +152,8 @@ def first_crossing(series, threshold: float) -> Optional[float]:
 def alert_time(row: dict, detector: str, threshold: float) -> Optional[float]:
     if detector == "ghostap":
         return first_crossing(row["ghostap_series"], threshold)
+    if detector == "kismet":
+        return row.get("kismet_first")
     return row["baseline_first"]
 
 
@@ -486,6 +504,10 @@ def main(argv=None) -> int:
     ap.add_argument("--unlabelled", choices=("legit", "ignore"), default="legit",
                     help="how to treat APs missing from a labels file (default: legit)")
     ap.add_argument("--no-charts", action="store_true")
+    ap.add_argument("--extended", action="store_true",
+                    help="also: confidence intervals, tune/test split, ROC and PR curves, learned weights, "
+                         "anomaly model, Kismet (see extended.md)")
+    ap.add_argument("--test-fraction", type=float, default=0.5, help="share of captures in the test split")
     args = ap.parse_args(argv)
 
     if len(args.pcap) != len(args.labels):
@@ -516,6 +538,12 @@ def main(argv=None) -> int:
           "threshold_sweep.csv".format(args.out))
     for p in charts:
         print("[+] chart: {}".format(p))
+    if args.extended:
+        from .evaluate_extended import extended
+        ext = extended(rows, cfg, args.out, test_fraction=args.test_fraction, charts=not args.no_charts)
+        print("[+] extended analysis: {}/extended.md and extended.json".format(args.out))
+        for line in ext["headline"]:
+            print("    " + line)
     return 0
 
 

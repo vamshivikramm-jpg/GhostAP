@@ -29,3 +29,5 @@ jobs:
         run: |
           python tools/make_eval_set.py
           python evaluate.py --dataset data/eval --out results --no-charts
+      - name: Numbers quoted in the docs match the results
+        run: python tools/sync_numbers.py
