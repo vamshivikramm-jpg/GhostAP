@@ -102,10 +102,11 @@ def run_capture(name: str, pcap: str, labels_path: str, cfg: dict,
                 m[r.name] = max(m.get(r.name, 0.0), float(r.value))
     base_first = {(a["ssid"], a["bssid"]): a["first_ts"] for a in duplicate_ssid_detector(obs)}
     kismet_path = os.path.splitext(pcap)[0] + ".kismet"      # F050: Kismet's log of the same capture
-    kismet_first = None
+    kismet_first, kismet_timed = None, True
     if os.path.exists(kismet_path):
-        from .kismet import first_alerts
+        from .kismet import first_alerts, replayed
         kismet_first = first_alerts(kismet_path)
+        kismet_timed = not replayed(kismet_path)            # replayed log: who, but not when
 
     series: Dict[Tuple[str, str], List[dict]] = {}
     for r in timeline:
@@ -136,6 +137,7 @@ def run_capture(name: str, pcap: str, labels_path: str, cfg: dict,
             "indicators": ind_max.get((ssid, bssid), {}),
             "kismet_first": None if kismet_first is None else kismet_first.get(bssid),
             "kismet_available": kismet_first is not None,
+            "kismet_timed": kismet_timed,
         })
     for r in timeline:
         r["scenario"] = name
@@ -173,7 +175,7 @@ def compute_metrics(rows: List[dict], detector: str, threshold: float) -> dict:
         positive = r["label"] == "evil_twin"
         if positive and t is not None:
             tp += 1
-            if r["attack_start"] is not None:
+            if r["attack_start"] is not None and (detector != "kismet" or r.get("kismet_timed", True)):
                 latencies.append(max(0.0, t - r["attack_start"]))
         elif positive:
             fn += 1

@@ -621,6 +621,13 @@ but legitimate access points averaged 8.5 instead of 2.4. The WPA2 twins' scores
 inflated by the same false evidence. The synthetic results in Section 6 are unchanged by
 the fixes.
 
+**Comparison with Kismet.** Kismet 2023-07 replayed the same recordings with its default
+configuration. It caught the two WPA2 twins through the deauthentication and broadcast-disconnect
+traffic they caused, missed the open twin, and raised no false alarm (precision 1.00, recall 0.67).
+Kismet's own same-name check needs the legitimate addresses configured in advance, the role
+GhostAP's saved baseline plays. Detection times are not compared, because Kismet stamps alerts in a
+replayed file with the time it processed them.
+
 **Limits of this result.** Three twins, all from one phone, in one location, with one
 sensor, on 2.4 GHz only, in runs of under 31 minutes. That is enough to show the detector
 works on real radio traffic and to find real bugs, not to estimate its accuracy in

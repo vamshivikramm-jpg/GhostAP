@@ -88,6 +88,26 @@ def test_kismet_reader(tmp_path, capsys):
         kismet.read_alerts(str(bad))
 
 
+def test_replayed_kismet_log_gives_who_but_not_when(tmp_path):
+    """Real Kismet 2023-07 logs of a replayed pcap: packets keep their capture times, alerts get
+    the time Kismet processed the file (hours later). Latency must not be computed from them."""
+    from ghostap.evaluate import compute_metrics
+    live, replay = str(tmp_path / "live.kismet"), str(tmp_path / "replay.kismet")
+    for path, packet_ts in ((live, 1700000150), (replay, 1699990000)):
+        _kismet_db(path)
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE packets (ts_sec INT, ts_usec INT)")
+        con.execute("INSERT INTO packets VALUES (?, 0)", (packet_ts,))
+        con.commit()
+        con.close()
+    assert not kismet.replayed(live) and kismet.replayed(replay)
+    row = {"label": "evil_twin", "attack_start": 1699990100.0, "kismet_first": 1700000190.0, "kismet_timed": False}
+    m = compute_metrics([row], "kismet", 30)
+    assert m["TP"] == 1 and m["latency_mean"] is None                   # detected, latency unknown
+    m = compute_metrics([dict(row, kismet_timed=True)], "kismet", 30)
+    assert m["latency_mean"] == 10090.0
+
+
 def test_extended_evaluation_with_kismet(tmp_path):
     import sys
     sys.path.insert(0, os.path.join(ROOT, "tools"))

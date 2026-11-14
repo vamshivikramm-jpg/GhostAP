@@ -7,9 +7,13 @@ raised one of the alerts below about that BSSID.
 Kismet log files (.kismet) are SQLite databases; the `alerts` table holds
     ts_sec, ts_usec, phyname, devmac, lat, lon, header, json
 where `header` is the alert name and `json` its details (source / transmitter / BSSID
-addresses). Kismet was NOT available where this was written: the reader follows Kismet's
-documented log format and is tested with a file built to that schema. Confirm it with
-your own Kismet capture on Kali before quoting Kismet numbers.
+addresses). Confirmed with Kismet 2023-07-R1 logs on Kali (14 Nov 2026).
+
+Replayed captures: Kismet can read a recorded pcap (`kismet -c file.pcap`), but it stamps its
+alerts with the time it *processed* the file, while its `packets` table keeps the capture
+times. Such a log still says which APs Kismet flagged, but not when: `replayed()` detects it
+and the evaluation then leaves Kismet's detection latency out. Also raise Kismet's
+`packet_backlog_limit` for replays, or it drops packets when reading faster than real time.
 
     python -m ghostap.kismet data/lab/run1.kismet        # list the alerts it found
 """
@@ -63,6 +67,20 @@ def read_alerts(path: str) -> List[dict]:
         out.append({"ts": float(sec) + float(usec or 0) / 1e6, "header": str(header), "macs": sorted(macs),
                     "text": (detail.get("kismet.alert.text") if isinstance(detail, dict) else "") or ""})
     return out
+
+
+def replayed(path: str, slack: float = 60.0) -> bool:
+    """True when the alerts are later than every packet in the log: Kismet replayed a recorded
+    file, so alert times are processing times, not capture times."""
+    con = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
+    try:
+        last_packet = con.execute("SELECT MAX(ts_sec) FROM packets").fetchone()[0]
+        first_alert = con.execute("SELECT MIN(ts_sec) FROM alerts").fetchone()[0]
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        con.close()
+    return last_packet is not None and first_alert is not None and first_alert > last_packet + slack
 
 
 def first_alerts(path: str, headers: Iterable[str] = TWIN_ALERTS) -> Dict[str, float]:

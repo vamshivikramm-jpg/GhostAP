@@ -46,7 +46,8 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 - **Phase 2 data:** F003 ships with the fingerprint *format* and loader plus clearly marked
   synthetic examples; real tool fingerprints come from your lab recordings. F084–F085 run on
   synthetic data until then.
-- **Not installed here:** Docker (F073) and Kismet (F050): files written and syntax-checked only.
+- **Not installed here:** Docker (F073): files written and checked. (Docker is now built in CI; Kismet
+  was confirmed on Kali on 14 Nov 2026.)
 
 ## Status
 
@@ -65,7 +66,7 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F011 | Per-network sensitivity | B | done |
 | F012 | Incident correlation | B | done |
 | F013 | Alert throttling and re-alerting | E | done |
-| F014 | Saved network baselines | A | done |
+| F014 | Saved network baselines | A | done (signed, versioned, approval-gated since 2.1) |
 | F015 | Monitored Networks page | C | done |
 | F016 | Baseline wizard | C | done |
 | F017 | Accept a change into the baseline | C | done |
@@ -101,7 +102,7 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F047 | Evaluation page | G | done |
 | F048 | Confidence intervals and test splits | G | done |
 | F049 | ROC and precision-recall curves | G | done |
-| F050 | Kismet as a second baseline | G | done* (Kismet not installed here: reader follows Kismet's documented log schema; confirm on Kali) |
+| F050 | Kismet as a second baseline | G | done (reader confirmed with Kismet 2023-07-R1 logs on Kali; replayed logs give detections but no latency) |
 | F051 | Scenario builder | G | done |
 | F052 | Session incident report | G | done |
 | F053 | Keep report numbers in sync | G | done |

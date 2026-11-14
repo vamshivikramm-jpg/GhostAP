@@ -92,6 +92,25 @@ verdicts, but legitimate APs' mean peak was 8.5 (highest 23.6) and the WPA2 twin
 50.0 and 36.5, partly from false evidence. The threshold sweep prefers 20 on these 3
 captures; the configured 30 is kept (thresholds are not tuned on reporting data).
 
+### Comparison with Kismet (release 2.1)
+
+Kismet 2023-07-R1 (on this Kali) replayed the same three recordings offline (`kismet -c run.pcap`,
+`packet_backlog_limit` raised so it logged every frame: 74,360 / 36,295 / 26,770, matching the pcaps).
+Kismet ran with its **default configuration**; its same-name detector (`APSPOOF`) needs the legitimate
+addresses of each network configured first, which is what GhostAP's saved baseline does.
+
+| Detector | Twins caught | False alarms (141 legitimate APs) | Precision | Recall | FPR |
+|---|---|---|---|---|---|
+| GhostAP | 3 / 3 | 0 | 1.00 | 1.00 | 0.00 |
+| Kismet (default config) | 2 / 3 | 0 | 1.00 | 0.67 | 0.00 |
+| Duplicate-SSID baseline | 3 / 3 | 2 | 0.60 | 1.00 | 0.01 |
+
+Kismet caught the two WPA2 twins through their side effects (`DEAUTHFLOOD` in run2, `BCASTDISCON` in run3:
+the hotspot rejecting clients) and raised nothing for the open twin. Detection latency is not compared:
+Kismet stamps alerts of a replayed file with the time it processed them, so `ghostap/kismet.py`
+now recognises such logs and the evaluation leaves Kismet's latency out. With three twins the
+intervals are wide (Wilson 95 %: Kismet recall 0.21–0.94, GhostAP 0.44–1.00).
+
 ## 5. Indicators on live traffic
 
 | Indicator | Evaluated live | Observed | Correct? |
