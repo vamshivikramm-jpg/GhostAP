@@ -345,6 +345,21 @@ def duplicate_ssid_detector(observations: Iterable[dict]) -> List[dict]:
 # F005 deauthentication floods and F008 beacon floods: attacks *on* a network
 # --------------------------------------------------------------------------- #
 
+# IEEE 802.11 reason codes seen in deauthentication / disassociation frames
+DEAUTH_REASONS = {
+    1: "unspecified", 2: "previous authentication no longer valid",
+    3: "station is leaving", 4: "inactivity", 5: "AP cannot handle all associated stations",
+    6: "class 2 frame from non-authenticated station", 7: "class 3 frame from non-associated station",
+    8: "station is leaving the BSS", 14: "message integrity (MIC) failure",
+    15: "4-way handshake timeout", 16: "group key handshake timeout", 23: "802.1X authentication failed",
+}
+# codes that mean "a device failed to log in", e.g. it tried a saved password on a network
+# that has the same name but a different password (seen live with a same-name phone hotspot)
+LOGIN_FAILURE_REASONS = {15, 16, 23}
+LOGIN_FAILURE_CAUSE = ("Devices failing to log in: e.g. phones or laptops trying their saved password "
+                       "on a network with the same name but a different password (such as a twin)")
+
+
 class DeauthDetector:
     """Counts deauthentication / disassociation frames per AP in a sliding window."""
 
@@ -388,6 +403,14 @@ class DeauthDetector:
             reason = ("{} deauthentication/disassociation frames within {:g} s against this AP "
                       "(peak), {:.0%} sent to everyone; often used to push clients onto an evil twin").format(
                 st["peak"], self.window, st["broadcast"] / max(1, st["frames"]))
+            benign = list(BENIGN_CAUSES["deauth_flood"])
+            if st["reasons"]:
+                code, n = max(st["reasons"].items(), key=lambda kv: (kv[1], -kv[0]))
+                reason += "; most common reason code {} ({}, {:.0%} of frames)".format(
+                    code, DEAUTH_REASONS.get(code, "other"), n / max(1, st["frames"]))
+                failed = sum(v for k, v in st["reasons"].items() if k in LOGIN_FAILURE_REASONS)
+                if failed * 2 > st["frames"]:
+                    benign.insert(0, LOGIN_FAILURE_CAUSE)
             score = min(100.0, 50.0 + 30.0 * min(1.0, st["peak"] / max(1, self.high)))
             ind = [{"name": "deauth_flood", "value": 1.0, "weight": 0.0, "contribution": score,
                     "reason": reason, "signature": True}]
@@ -395,7 +418,7 @@ class DeauthDetector:
                         "score": round(score, 1), "first_ts": st["first_ts"], "high_ts": st["high_ts"],
                         "peak_ts": st["peak_ts"], "last_ts": st["last_ts"], "indicators": ind,
                         "reasons": "deauth_flood (+{:.0f}): {}".format(score, reason),
-                        "benign_causes": list(BENIGN_CAUSES["deauth_flood"])})
+                        "benign_causes": benign})
         return sorted(out, key=lambda a: -a["score"])
 
 

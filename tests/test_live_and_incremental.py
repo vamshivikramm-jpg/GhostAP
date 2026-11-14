@@ -206,6 +206,10 @@ def test_label_capture_roundtrip(capture, tmp_path, capsys):
     raw = json.load(open(tmp_path / "lab1.labels.json"))
     assert 179 < labels[EVIL[1]]["attack_start"] - raw["capture_start"] < 181
     assert label_capture.main([pcap, "--evil", "02:00:00:00:00:00"]) == 1
+    # a run without a twin (false-positive measurement) also gets a labels file
+    assert label_capture.main([pcap, "--no-twin", "--out", str(tmp_path / "none.labels.json")]) == 0
+    labels = load_labels(str(tmp_path / "none.labels.json"))["aps"]
+    assert len(labels) == 4 and all(v["label"] == "legit" for v in labels.values())
 
 
 def test_old_alerts_table_gets_triage_columns(tmp_path):

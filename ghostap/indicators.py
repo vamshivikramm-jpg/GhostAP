@@ -25,7 +25,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from .parser import CIPHER_RANK, HIDDEN_SSID, akm_class, rsn_fields, security_rank
+from .parser import (CIPHER_RANK, HIDDEN_SSID, akm_class, band_of, channel_from_freq, rsn_fields,
+                     security_rank)
 from .signatures import SIGNATURE_NAMES, karma_value, lookalike_target, match_tool
 from .storage import Store
 
@@ -131,6 +132,7 @@ class SSIDBaseline:
             "bssid_fingerprints": {b: sorted(f) for b, f in sorted(self.bssid_fingerprints.items())},
             "rsn_best": self.rsn_best,
             "bssid_skew": {b: [round(v[0], 2), round(v[1], 2)] for b, v in sorted(self.bssid_skew.items())},
+            "bssid_skew_kind": "relative",
         }
 
     @classmethod
@@ -148,7 +150,9 @@ class SSIDBaseline:
             bssid_fingerprints={b.lower(): set(f) for b, f in d.get("bssid_fingerprints", {}).items()},
             allowlist={b.lower() for b in allowlist}, saved=True,
             rsn_best=d.get("rsn_best"),
-            bssid_skew={b.lower(): (float(v[0]), float(v[1])) for b, v in d.get("bssid_skew", {}).items()})
+            # files saved before the clock fix hold drifts against the sensor clock: not comparable
+            bssid_skew={b.lower(): (float(v[0]), float(v[1])) for b, v in d.get("bssid_skew", {}).items()}
+            if d.get("bssid_skew_kind") == "relative" else {})
 
 
 class Baseline:
@@ -166,10 +170,12 @@ class Baseline:
         self.ssids: Dict[str, SSIDBaseline] = {}
 
         groups: Dict[str, Dict[str, List[dict]]] = defaultdict(lambda: defaultdict(list))
+        radios: Dict[str, List[dict]] = defaultdict(list)       # per BSSID, any SSID (clock refs)
         for o in observations:
             if o["ts"] >= self.end:
                 break
             groups[o["ssid"]][o["bssid"]].append(o)
+            radios[o["bssid"]].append(o)
 
         for ssid, by_bssid in groups.items():
             b = SSIDBaseline(ssid, allowlist=self.allowlist)
@@ -190,7 +196,7 @@ class Baseline:
                 if strength:
                     b.rsn_best = strength if b.rsn_best is None else {
                         k: max(b.rsn_best.get(k, strength[k]), strength[k]) for k in strength}
-                skew = clock_skew_ppm(obs)
+                skew = relative_clock_skew_ppm(obs, _busiest(radios, bssid))
                 if skew is not None:
                     b.bssid_skew[bssid] = skew
                 if ap.beacon_interval:
@@ -270,6 +276,72 @@ def clock_skew_ppm(obs: Sequence[dict], max_points: int = 600) -> Optional[Tuple
     resid = sum((p[1] - my - slope * (p[0] - mx)) ** 2 for p in pts)
     se = math.sqrt(resid / (n - 2) / sxx) if n > 2 else float("inf")
     return (slope - 1.0) * 1e6, se * 1e6
+
+
+SKEW_MIN_REFS = 3        # other APs needed to compare clocks with
+SKEW_MAX_REFS = 15       # the busiest ones are used
+SKEW_MAX_POINTS = 120    # frames of the AP itself that are compared
+SKEW_MAX_GAP = 5.0       # s: a reference's clock is interpolated only between frames this close
+
+
+def _tsf_points(obs: Sequence[dict]) -> Optional[List[Tuple[float, float]]]:
+    """(capture time, TSF in s) for frames with a TSF, or None if the clock reset inside."""
+    pts = [(o["ts"], o["tsf"] / 1e6) for o in obs if o.get("tsf") is not None]
+    if any(b[1] < a[1] for a, b in zip(pts, pts[1:])):
+        return None
+    return pts
+
+
+def relative_clock_skew_ppm(obs: Sequence[dict], refs: Iterable[Sequence[dict]]
+                            ) -> Optional[Tuple[float, float]]:
+    """F007: (drift, standard error) in ppm of an AP's TSF clock against the clocks of
+    other APs heard over the same time, not against the sensor's clock.
+
+    The sensor's clock is not a stable reference: NTP, systemd-timesyncd or VM tools
+    slew it by hundreds of ppm (seen live on a Kali VM: every AP "drifted" +250 ppm
+    during the learning period and -110 ppm a few minutes later). Each of the AP's
+    frames is paired with every reference AP's TSF interpolated to the same capture
+    moment, so any error of the capture clock cancels; the slope of TSF against
+    reference TSF is the drift between the two crystals. The median over the
+    references is returned (a twin among the references cannot move it). Needs
+    >= 10 frames over >= 30 s and SKEW_MIN_REFS usable references, else None.
+    """
+    pts = _tsf_points(obs)
+    if not pts or len(pts) < 10 or pts[-1][0] - pts[0][0] < 30:
+        return None
+    pts = pts[::max(1, len(pts) // SKEW_MAX_POINTS)]
+    found = []
+    for ref in refs:
+        rp = _tsf_points(ref)
+        if not rp or len(rp) < 2:
+            continue
+        r_ts = [p[0] for p in rp]
+        xs, ys = [], []
+        for ts, tsf in pts:
+            k = bisect.bisect_left(r_ts, ts)
+            if 0 < k < len(rp) and r_ts[k] - r_ts[k - 1] <= SKEW_MAX_GAP:
+                (t0, f0), (t1, f1) = rp[k - 1], rp[k]
+                xs.append(f0 + (f1 - f0) * ((ts - t0) / (t1 - t0) if t1 > t0 else 0.0))
+                ys.append(tsf)
+        if len(xs) < 10 or xs[-1] - xs[0] < 30:
+            continue
+        n = len(xs)
+        mx, my = sum(xs) / n, sum(ys) / n
+        sxx = sum((x - mx) ** 2 for x in xs)
+        if sxx == 0:
+            continue
+        slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+        resid = sum((y - my - slope * (x - mx)) ** 2 for x, y in zip(xs, ys))
+        found.append(((slope - 1.0) * 1e6, math.sqrt(resid / (n - 2) / sxx) * 1e6))
+    if len(found) < SKEW_MIN_REFS:
+        return None
+    return (statistics.median(v[0] for v in found), statistics.median(v[1] for v in found))
+
+
+def _busiest(groups: Dict[str, Sequence[dict]], exclude: str) -> List[Sequence[dict]]:
+    """Reference APs for relative_clock_skew_ppm: the busiest other radios."""
+    keys = sorted((b for b in groups if b != exclude), key=lambda b: (-len(groups[b]), b))
+    return [groups[b] for b in keys[:SKEW_MAX_REFS]]
 
 
 def _detail_downgrade(ap: APStats, base: SSIDBaseline):
@@ -458,9 +530,24 @@ def tsf_anomaly(ap: APStats, base: Optional[SSIDBaseline], siblings,
             _fmt_secs(ap_up), ap.ssid, _fmt_secs(sib_up), note))
 
 
+def _heard_on_channel(o: dict) -> bool:
+    """Was this frame received while the sensor was tuned to (or, on 2.4 GHz, within two
+    channels of) the channel the AP advertises? A channel-hopping sensor also hears a
+    strong nearby AP faintly while tuned several channels away (seen live: -8 dBm on
+    channels 1-4 and -50 dBm on channels 7-10 from one phone hotspot on channel 2).
+    Frames without the tuned frequency (older pcaps, synthetic data) count as on-channel."""
+    tuned = channel_from_freq(o.get("freq"))
+    if tuned is None or o.get("channel") is None:
+        return True
+    if band_of(o.get("freq")) == "2.4":
+        return abs(tuned - o["channel"]) <= 2
+    return tuned == o["channel"]
+
+
 def _signal_tracks(obs: Sequence[dict], gap_db: float):
-    """F006: two clearly separated signal levels that keep alternating = two transmitters."""
-    pts = [(o["ts"], o["rssi"]) for o in obs if o.get("rssi") is not None]
+    """F006: two clearly separated signal levels that keep alternating = two transmitters.
+    Only frames heard on the AP's own channel are compared (see _heard_on_channel)."""
+    pts = [(o["ts"], o["rssi"]) for o in obs if o.get("rssi") is not None and _heard_on_channel(o)]
     if len(pts) < 10:
         return None
     vals = sorted(r for _, r in pts)
@@ -787,6 +874,21 @@ class Analyzer:
         chunk = obs[max(0, hi - self.HEAD):hi] if hi else obs[:min(self.HEAD, limit)]
         return APStats.from_obs(chunk) if chunk else None
 
+    def _relative_skew(self, key, until: Optional[float]) -> Optional[Tuple[float, float]]:
+        """F007: this AP's clock drift against the other radios over the same span."""
+        obs = self._slice(key, None, until)[-600:]
+        if len(obs) < 10:
+            return None
+        lo = obs[0]["ts"]
+        radios: Dict[str, List[dict]] = {}
+        for k in self._by_ap:
+            if k[1] == key[1] or k[1] in radios:
+                continue
+            ref = self._slice(k, lo, until)
+            if len(ref) >= 10:
+                radios[k[1]] = ref
+        return relative_clock_skew_ppm(obs, _busiest(radios, key[1]))
+
     def evaluate(self, ssid: str, bssid: str, until: Optional[float] = None,
                  window: Optional[float] = None) -> Optional[List[IndicatorResult]]:
         """All indicator results for one AP using data up to `until`.
@@ -850,7 +952,7 @@ class Analyzer:
                 if st is not None:
                     siblings[b] = st
         if base is not None and bssid in base.bssid_skew:
-            head.skew_ppm = clock_skew_ppm(self._slice(key, None, until))
+            head.skew_ppm = self._relative_skew(key, until)
         settings = self.network_settings.get(compared_with) or {}
         enabled = settings.get("enabled") or {}
         results = []

@@ -17,7 +17,7 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 |---|-------|--------|
 | 0 | Setup & hardware (Linux + monitor-mode adapter) | manual |
 | 1 | Collector + storage + synthetic test data | ✅ done |
-| 2 | Labelled lab dataset (real captures) | todo |
+| 2 | Labelled lab dataset (real captures) | in progress: first live runs, see [docs/testing/live-kali-validation.md](docs/testing/live-kali-validation.md) |
 | 3 | Indicators | ✅ done |
 | 4 | Risk engine | ✅ done |
 | 5 | Dashboard | ✅ done |

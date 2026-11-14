@@ -5,11 +5,25 @@ public sources report and must be checked on your machine.
 
 ## Tested
 
-Nothing yet. Live capture has only been exercised with simulated frames. Add a row here
-(adapter, chipset, driver, kernel, distribution, bands, date) after the checklist below
-passes.
+| Adapter | Chipset / USB ID | Driver | Kernel / distribution | Bands verified | Date |
+|---|---|---|---|---|---|
+| TP-Link Archer T2U Plus | RTL8821AU, `2357:0120` | out-of-tree `88XXau` (`rtl88XXau`) | 6.8.11-arm64, Kali Rolling 2024.3, VMware VM with USB pass-through | **2.4 GHz only** (channels 1–13 hopping) | 2026-11-14 |
 
-## Planned sensor: TP-Link Archer T2U Plus (AC600 High Gain, V1)
+What worked live: monitor mode via `tools/kali_monitor.sh`, channel hopping with `iw`,
+signal strength (dBm) on every frame, the tuned frequency in radiotap, FCS-flagged frames,
+about 30 stored frames per second from about 45 networks, zero damaged frames rejected in
+the last run. `iw` lists the 5 GHz channels 36–144, but **5 GHz capture was not tested**.
+Details: [testing/live-kali-validation.md](testing/live-kali-validation.md).
+
+Two effects of this setup that GhostAP now handles (both found in that test):
+- **The VM's clock is adjusted** (systemd-timesyncd and VMware Tools time sync). Capture
+  timestamps drift by up to about 250 ppm, so clock drift is measured between access
+  points, not against the sensor's clock.
+- **A strong nearby AP is also heard several channels away** while hopping (−8 dBm on its
+  own channel, about −50 dBm seven channels off). Signal-level comparisons use only frames
+  received on or next to the AP's own channel.
+
+## Sensor: TP-Link Archer T2U Plus (AC600 High Gain, V1)
 
 | Item | Value |
 |---|---|

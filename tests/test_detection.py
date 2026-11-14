@@ -184,6 +184,48 @@ def test_normal_signal_variation_is_not_two_tracks():
     assert by_name(Analyzer(o, 2).evaluate("Lab", LEGIT))["bssid_conflict"].value == 0
 
 
+def _hopping(t, ch=2):
+    """Sensor hopping channels 1-13, 0.25 s each: (tuned frequency, dB lost off-channel)."""
+    tuned = 1 + int(t / 0.25) % 13
+    return 2407 + 5 * tuned, (0 if abs(tuned - ch) <= 2 else 40)
+
+
+def test_off_channel_reception_while_hopping_is_not_two_transmitters():
+    """Found in live testing: a phone hotspot on channel 2, next to the sensor, was heard at
+    about -8 dBm while tuned to channels 1-4 and about -48 dBm on channels 7-10. One
+    transmitter (sequence numbers steady), but it was reported as two."""
+    o = []
+    for i in range(1200):                                    # 120 s of beacons, 10 per second
+        t = i / 10
+        f, loss = _hopping(t)
+        o.append(dict(obs(t, ch=2, rssi=-8 - loss, seq=(i * 5) % 4096), freq=f))
+    r = by_name(Analyzer(o, 1).evaluate("Lab", LEGIT, until=1120, window=10))["bssid_conflict"]
+    assert r.value == 0, r.reason
+
+
+def test_two_transmitters_are_still_found_while_hopping():
+    o = []
+    for i in range(1200):
+        t = i / 10
+        f, loss = _hopping(t)
+        o.append(dict(obs(t, ch=2, rssi=-60 - loss, seq=(i * 5) % 4096), freq=f))
+        if t >= 90:                                              # a louder clone on the same channel
+            o.append(dict(obs(t + 0.05, ch=2, rssi=-25 - loss, seq=(i * 3) % 4096), freq=f))
+    r = by_name(Analyzer(o, 1).evaluate("Lab", LEGIT, until=1120, window=20))["bssid_conflict"]
+    assert r.value == 1.0 and "two signal levels" in r.reason
+
+
+def test_on_channel_rule():
+    from ghostap.indicators import _heard_on_channel
+    assert _heard_on_channel({"channel": 2, "freq": 2412})          # tuned 1: overlaps channel 2
+    assert _heard_on_channel({"channel": 2, "freq": 2427})          # tuned 4
+    assert not _heard_on_channel({"channel": 2, "freq": 2442})      # tuned 7
+    assert _heard_on_channel({"channel": 36, "freq": 5180})
+    assert not _heard_on_channel({"channel": 40, "freq": 5180})     # 5 GHz channels do not overlap
+    assert _heard_on_channel({"channel": 6, "freq": None})          # no tuning information: keep
+    assert _heard_on_channel({"channel": None, "freq": 2412})
+
+
 # ---------------------------------------------------------------- F008 beacon rate
 def test_beacon_flood_rate_from_one_ap():
     o = legit_minutes()
@@ -202,19 +244,75 @@ def test_flood_detector_many_new_radios():
 
 
 # ---------------------------------------------------------------- F007 clock skew
+NEIGHBOURS = [("Cafe", "10:00:00:00:00:0%d" % i, ppm) for i, ppm in enumerate((-6.0, 2.0, 9.0, -1.5))]
+
+
+def _air(lab_tsf, sensor=lambda t: 0.0, seconds=600, neighbours=NEIGHBOURS):
+    """Lab AP plus neighbour APs, frames every 1 s. lab_tsf(t): the Lab AP's TSF at true
+    time t. sensor(t): error of the capture clock in s at true time t (NTP / VM slewing)."""
+    o = []
+    for t in range(seconds):
+        o.append(dict(obs(t, tsf=int(lab_tsf(t))), ts=1000.0 + t + sensor(t)))
+        for k, (ssid, b, ppm) in enumerate(neighbours):
+            tt = t + 0.1 * (k + 1)                   # heard a little later (channel hopping)
+            o.append(dict(obs(tt, bssid=b, ssid=ssid, tsf=int(7e9 + tt * 1e6 * (1 + ppm * 1e-6))),
+                          ts=1000.0 + tt + sensor(tt)))
+    return o
+
+
+def _clone_tsf(t):
+    """The original radio (0 ppm) until 150 s, then a clone of its address (+300 ppm)."""
+    return 5e9 + t * 1e6 if t < 150 else 5e9 + 150e6 + (t - 150) * 1e6 * 1.0003
+
+
+def _slewed(t):
+    """Sensor clock as seen live on a Kali VM: +250 ppm for 120 s, then -110 ppm."""
+    return 250e-6 * t if t < 120 else 250e-6 * 120 - 110e-6 * (t - 120)
+
+
 def test_clock_skew_change_on_a_known_address():
-    o = [obs(t, tsf=int(5e9 + t * 1e6)) for t in range(150)]                        # original, 0 ppm
-    tsf150 = 5e9 + 150 * 1e6
-    o += [obs(t, tsf=int(tsf150 + (t - 150) * 1e6 * 1.0003)) for t in range(150, 600)]  # +300 ppm clone
-    r = by_name(Analyzer(o, 2).evaluate("Lab", LEGIT))["tsf_anomaly"]
+    r = by_name(Analyzer(_air(_clone_tsf), 2).evaluate("Lab", LEGIT))["tsf_anomaly"]
     assert r.value > 0.5 and "clock drift" in r.reason
 
 
 def test_capture_jitter_alone_is_not_a_clock_change():
     import random
     rnd = random.Random(3)
-    o = [dict(obs(t), ts=1000.0 + t + rnd.uniform(0, 0.1)) for t in range(600)]
+    o = [dict(x, ts=x["ts"] + rnd.uniform(0, 0.1)) for x in _air(lambda t: 5e9 + t * 1e6)]
     assert by_name(Analyzer(o, 2).evaluate("Lab", LEGIT))["tsf_anomaly"].value == 0
+
+
+def test_sensor_clock_slewing_is_not_a_clock_change():
+    """Found in live testing: the capture (system) clock was slewed by NTP / VMware time
+    sync, and every AP 'drifted' +250 ppm in the baseline and -110 ppm later, so the
+    drift check called every known network 'different hardware'. Drifts are measured
+    against the other APs, so the sensor's clock cancels."""
+    o = _air(lambda t: 5e9 + t * 1e6, sensor=_slewed)
+    an = Analyzer(o, 2)
+    for ssid, b in [("Lab", LEGIT)] + [(s, b) for s, b, _ in NEIGHBOURS]:
+        assert by_name(an.evaluate(ssid, b))["tsf_anomaly"].value == 0, b
+    # the measurement itself: the Lab AP's crystal is 0 ppm, the neighbours' median +0.25
+    ppm, se = an.baseline.get("Lab").bssid_skew[LEGIT]
+    assert abs(ppm - -0.25) < 1.0 and se < 1.0
+
+
+def test_clone_is_still_found_while_the_sensor_clock_slews():
+    r = by_name(Analyzer(_air(_clone_tsf, sensor=_slewed), 2).evaluate("Lab", LEGIT))["tsf_anomaly"]
+    assert r.value > 0.5 and "clock drift" in r.reason
+
+
+def test_no_clock_verdict_without_other_aps_to_compare():
+    o = _air(_clone_tsf, neighbours=NEIGHBOURS[:2])            # only 2 references: too few
+    r = by_name(Analyzer(o, 2).evaluate("Lab", LEGIT))["tsf_anomaly"]
+    assert "clock drift" not in r.reason
+
+
+def test_saved_baselines_from_before_the_clock_fix_ignore_old_drifts():
+    from ghostap.indicators import SSIDBaseline
+    old = {"bssids": [LEGIT], "bssid_skew": {LEGIT: [252.3, 0.7]}}      # against the sensor clock
+    assert SSIDBaseline.from_dict("Lab", old).bssid_skew == {}
+    new = SSIDBaseline(ssid="Lab", bssids={LEGIT}, bssid_skew={LEGIT: (-0.5, 0.2)}).to_dict()
+    assert SSIDBaseline.from_dict("Lab", new).bssid_skew == {LEGIT: (-0.5, 0.2)}
 
 
 # ---------------------------------------------------------------- F005 deauthentication floods
@@ -239,6 +337,24 @@ def test_deauth_frames_are_parsed_without_client_addresses(tmp_path):
     assert not any(client in str(v) for r in rows for v in r)        # privacy: no client address stored
     ev = parse_event(_deauth(LEGIT, client, 1.0))
     assert ev["kind"] == "deauth" and ev["bssid"] == LEGIT and ev["broadcast"] is False and ev["reason"] == 7
+
+
+def test_deauth_alert_names_the_reason_code_and_login_failures():
+    """Live test: a same-name hotspot with another password made devices fail the 4-way
+    handshake (reason 15) again and again. The alert keeps its score and level but says so."""
+    det = DeauthDetector({"deauth_window_seconds": 10, "deauth_medium": 10, "deauth_high": 30})
+    det.update([{"ts": 100 + i * 0.5, "kind": "deauth", "bssid": LEGIT, "broadcast": False,
+                 "reason": 15 if i % 4 else 3} for i in range(16)])
+    a = det.alerts()[0]
+    assert a["level"] == "MEDIUM"
+    assert "reason code 15 (4-way handshake timeout" in a["reasons"]
+    assert a["benign_causes"][0].startswith("Devices failing to log in")
+    det2 = DeauthDetector({"deauth_window_seconds": 10, "deauth_medium": 10, "deauth_high": 30})
+    det2.update([{"ts": 100 + i * 0.1, "kind": "deauth", "bssid": LEGIT, "broadcast": True, "reason": 7}
+                 for i in range(16)])
+    b = det2.alerts()[0]
+    assert b["score"] == a["score"] and "reason code 7" in b["reasons"]
+    assert not b["benign_causes"][0].startswith("Devices failing")
 
 
 def test_deauth_detector_levels():

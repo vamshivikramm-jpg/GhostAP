@@ -218,13 +218,25 @@ Start GhostAP first and wait until the banner says the learning period is over. 
 on one of these.
 
 **Option A: phone hotspot (simplest).** Rename your phone's hotspot to exactly your lab
-router's network name (same capitalisation) and set it to **no password**. Expected on
-the dashboard within about 30 s:
+router's network name (same capitalisation) and set it to **no password**. Set the
+hotspot's band to **2.4 GHz** (many phones default to 5 GHz) or hop 5 GHz channels too.
+Expected on the dashboard within about 30 s (seen live, see
+[testing/live-kali-validation.md](testing/live-kali-validation.md)):
 - security downgrade (open vs. WPA2);
-- new radio from another vendor;
-- freshly booted;
+- new radio with a randomised (locally administered) address;
 - a different beacon fingerprint;
+- a different channel, if the phone picks another one;
 - probably a stronger signal.
+
+A phone hotspot does **not** look freshly booted: phones keep their beacon clock running,
+so the uptime check stays quiet. Phones also pick a new random BSSID each time the hotspot
+is switched on; the beacon fingerprint stays the same.
+
+A twin **with** a password is the hard case: it scored about 30 live (just at the alert
+line), from its new address and its beacon structure only. If your own devices have
+saved the router's password, they may try it on a same-name WPA2 twin and fail: expect a
+deauthentication alert with reason code 15 (4-way handshake timeout). That is real
+activity caused by the twin, not an attack on your router.
 
 **Option B: a second adapter running hostapd** (closer to a real attack tool). The
 following broadcasts an open network called `MyLabWiFi` on channel 11. It hands out no
@@ -253,6 +265,8 @@ one GhostAP listens on. Write down when you switched it on: `date +%s`.
    2–3 clean minutes, then switch the twin on (section 7) for a few minutes. Repeat with
    variations: twin on another channel, twin with a password, a run with no twin at all
    (this measures false positives), a reboot of your real router, and so on.
+   To evaluate a recording while GhostAP is still writing it, copy it to another folder
+   first. A capture that is still growing ends in a partly written frame.
 2. **Find the twin's BSSID:**
    ```bash
    python tools/label_capture.py data/lab/run1.pcap
@@ -261,6 +275,8 @@ one GhostAP listens on. Write down when you switched it on: `date +%s`.
    ```bash
    python tools/label_capture.py data/lab/run1.pcap --evil <twin-bssid>
    ```
+   For a run **without** a twin (false-positive measurement):
+   `python tools/label_capture.py data/lab/run0.pcap --no-twin`.
    If the twin **cloned** your router's BSSID, give the start time explicitly:
    `--attack-start +180` (seconds into the capture) or `--attack-start <epoch>`.
 4. **Evaluate everything in the folder:**
@@ -297,6 +313,8 @@ This returns the adapter to normal (managed) mode and restarts NetworkManager.
 | Monitor mode set, but 0 frames | NetworkManager switched it back: re-run `start`. Also check `iw dev wlan1 info` shows `type monitor`, and that you're near an AP on the channels you hop |
 | Status bar says *skipped N damaged frames* | Normal on a real radio. Frames that fail their checksum, are truncated or malformed are dropped, so they can't create fake networks or false alarms. A very high number means a weak signal or a busy channel: move closer or check the antenna |
 | Browser shows *GhostAP only answers requests addressed to localhost* | You opened it via a hostname or IP while GhostAP listens on 127.0.0.1. Use `http://127.0.0.1:8050`, or start it with `--host 0.0.0.0` (token login) |
+| The phone hotspot never appears | It runs on 5 GHz. Set the hotspot to 2.4 GHz, or add 5 GHz channels to `--hop` |
+| Deauthentication alert, reason code 15, while a WPA2 twin is on | Your devices try their saved password on the twin and fail the 4-way handshake. Real activity caused by the twin; the alert says so |
 | Frames arrive, but your network never appears | It is on a channel you aren't hopping (5 GHz?). Use `--hop all` and `sudo iw reg set <country>` |
 | `Device or resource busy` | Another process is using the adapter: `sudo airmon-ng check kill` |
 | Status bar: *hopping stopped: needs the 'iw' tool* | `sudo apt install -y iw` |
@@ -314,6 +332,7 @@ sudo tools/kali_monitor.sh check                     # which adapter, supports m
 sudo tools/kali_monitor.sh start wlan1               # monitor mode
 sudo .venv/bin/python -m ghostap.web --iface wlan1 --hop 1,6,11 --save-pcap data/lab/run1.pcap
 python tools/label_capture.py data/lab/run1.pcap --evil <twin-bssid>
+python tools/label_capture.py data/lab/run0.pcap --no-twin   # run without a twin
 python evaluate.py --dataset data/lab --out results/lab
 sudo tools/kali_monitor.sh stop wlan1                # normal Wi-Fi back
 ```

@@ -7,6 +7,7 @@ Step 1: list the access points in the capture, to find your lab twin's BSSID
 Step 2: write lab1.labels.json next to the pcap
     python tools/label_capture.py lab1.pcap --evil 02:11:22:33:44:55
     python tools/label_capture.py lab1.pcap --evil 02:11:22:33:44:55 --attack-start +240
+    python tools/label_capture.py lab0.pcap --no-twin     # a run without a twin (false positives)
 
 --attack-start:
     auto      (default) the twin's first frame in the capture. Correct when the twin
@@ -74,8 +75,11 @@ def print_table(t0, aps):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="List APs in a capture or write its labels file.")
     ap.add_argument("pcap")
-    ap.add_argument("--evil", action="append", default=[], metavar="BSSID",
-                    help="BSSID of a lab evil twin (repeat for several)")
+    who = ap.add_mutually_exclusive_group()
+    who.add_argument("--evil", action="append", default=[], metavar="BSSID",
+                     help="BSSID of a lab evil twin (repeat for several)")
+    who.add_argument("--no-twin", action="store_true",
+                     help="no twin in this capture: label every AP legit (measures false positives)")
     ap.add_argument("--attack-start", default="auto", help="auto | +SECONDS | EPOCH (see --help)")
     ap.add_argument("--baseline-minutes", type=float, default=2.0,
                     help="warn if an attack starts inside the baseline (default 2)")
@@ -90,7 +94,7 @@ def main(argv=None) -> int:
     if not aps:
         print("[!] no beacon / probe-response frames in {}".format(args.pcap), file=sys.stderr)
         return 1
-    if not args.evil:
+    if not args.evil and not args.no_twin:
         print_table(t0, aps)
         print("\n[i] re-run with --evil <BSSID> to write the labels file")
         return 0

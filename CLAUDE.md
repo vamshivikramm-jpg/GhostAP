@@ -22,7 +22,7 @@ dashboard. The README has user-facing docs; this file is the working context.
 | Phase | State |
 |---|---|
 | 1 collector + storage + synthetic data | done |
-| 2 labelled **real** lab captures | **next: needs Kali + monitor-mode adapter** (see `docs/KALI_SETUP.md` §7–8) |
+| 2 labelled **real** lab captures | **started 2026-11-14**: 3 live runs (data/lab_eval, gitignored), report `docs/testing/live-kali-validation.md`; more runs needed (5 GHz, longer, other twins) |
 | 3 indicators (8) / 4 risk engine / 5 dashboard / 6 evaluation | done |
 | 7 report + demo | drafted: `docs/REPORT.md`, `docs/REPORT.docx`, `docs/DEMO.md` |
 | Feature expansion F001–F091 (phases A–J) | built; per-feature status in `docs/ROADMAP.md` (`done*` = needs hardware, credentials or Phase 2 data to confirm) |
@@ -66,7 +66,7 @@ tools/                   make_test_pcap, make_eval_set (11 scenarios), build_sce
                          demo, sync_numbers, bench_large_site, screenshot_dashboard, kali_monitor.sh,
                          install_service.sh
 deploy/, Dockerfile, docker-compose.yml          systemd unit, container (not built here)
-tests/                   pytest (239 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
+tests/                   pytest (247 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
                          pip-audit, tests, evaluation smoke test, sync_numbers check)
 ```
 
@@ -99,6 +99,13 @@ python -m ghostap.apikeys create --name X --scope read
 - R = Σwᵢxᵢ/Σwᵢ×100 (Σw = 15.5). Every 10 s, scored on the last 10 s of frames; the
   smoothed score is the mean of the last 3 raw scores. MEDIUM ≥ 30 (alert), HIGH ≥ 60.
 - tsf_anomaly uses the AP's first frames and its full reset history, not the window.
+  Its clock-drift check (F007) measures each AP's TSF against the TSF of up to 15 other APs
+  over the same span (`relative_clock_skew_ppm`), never against the sensor clock: a Kali VM's
+  clock was slewed by ~250 ppm live. Saved baselines carry `bssid_skew_kind: relative`;
+  older files' drifts are ignored.
+- bssid_conflict's signal-track check (F006) uses only frames heard on or within two
+  channels (2.4 GHz) of the AP's own channel (`_heard_on_channel`): a hopping sensor hears
+  a strong AP faintly on far channels.
 - Unit of evaluation = one (SSID, BSSID) per capture.
 
 ## Conventions
@@ -149,7 +156,8 @@ python -m ghostap.apikeys create --name X --scope read
 ## Honesty rules for results and the report
 
 - The 11 evaluation scenarios **and the 4 beacon-structure profiles are synthetic and
-  author-designed**. Always say so. Real numbers come from Phase 2.
+  author-designed**. Always say so. Real numbers come from Phase 2. The first live results
+  (3 runs, 3 twins, one lab, one phone) are too few to generalise; say that with them.
 - Don't tune the alert threshold (or weights) on the data used to report results. The
   sweep says 15 gives a higher F1 on the synthetic set; the configured 30 is kept deliberately.
 - Keep the known limitation visible: s11 (twin that also copies the beacon structure) is missed.
