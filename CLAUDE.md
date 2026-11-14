@@ -126,6 +126,8 @@ python -m ghostap.apikeys create --name X --scope read
   `Origin`s (local mode trusts localhost, so this is the CSRF defence). Keep it.
 - Database changes: add a `(version, function)` to `MIGRATIONS` in storage.py (never edit a
   released one) plus a test; `PRAGMA user_version` tracks it; newer databases are refused.
+- Live capture keeps one socket open for the whole run (`collector._listen`, `sniff(opened_socket=…)`);
+  reopening it per call spammed the kernel log and dropped frames. Tests patch `_listen`.
 - Live detector memory is capped by `retention.memory_minutes` (prunes the Analyzer only;
   `tests/test_memory_bound.py` checks scores are identical). Indicators may only look at the
   scoring window, each AP's first `Analyzer.HEAD` frames and TSF resets.

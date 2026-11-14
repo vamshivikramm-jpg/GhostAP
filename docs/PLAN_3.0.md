@@ -7,8 +7,9 @@
 > two-person when ≥ 2 admins exist. Not answered yet: an OpenWrt router or hostapd AP the owner controls
 > (the hwsim lab's hostapd covers the demos meanwhile).
 > - **2.1 (in progress):** done: deauth reason classes (leave reasons 3/8 count one third) and the channel-flip
->   sequence rule. The look-alike dual-band case waits for O2 (declared topology, 3.0). Still to do in 2.1:
->   persistent capture socket (L2), 5 GHz live run, multi-hour soak, Kismet comparison, 2.0 Phase 2.
+>   sequence rule; persistent capture socket (L2, verified live: 2 kernel log lines per run instead of ~2/s);
+>   5 GHz receive verified (75 s). The look-alike dual-band case waits for O2 (declared topology, 3.0).
+>   Still to do in 2.1: a long 5 GHz run with a twin, multi-hour soak, Kismet comparison, 2.0 Phase 2.
 
 Research and planning only. Nothing in the repository, the database, the dependencies, the
 wireless interface or Git was changed while preparing this plan (14 Nov 2026, `main` at `c736bb5`,

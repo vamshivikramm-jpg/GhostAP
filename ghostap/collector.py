@@ -41,6 +41,14 @@ def _is_beacon_or_probe_resp(pkt) -> bool:
     return getattr(pkt, "type", None) == 0 and getattr(pkt, "subtype", None) in WANTED_SUBTYPES
 
 
+def _listen(iface: str):
+    """One capture socket for the whole live run. Opening a socket per sniff() call (once a
+    second) made the driver log "entered/left promiscuous mode" every second (about 10,000
+    kernel log lines in a live test) and left a short receive gap at each reopen."""
+    from scapy.config import conf
+    return conf.L2listen(iface=iface)
+
+
 def collect_pcap(path: str, store: Store, stats: Optional[dict] = None) -> int:
     """Parse every beacon / probe response in a pcap into `store`.
 
@@ -112,12 +120,15 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
     if control is not None:
         control.iface, control.hopper = iface, hopper
     start = time.time()
+    sock = None
     try:
+        sock = _listen(iface)
         while not (stop is not None and stop.is_set()):
             if duration and time.time() - start >= duration:
                 break
             chunk = 1.0 if not duration else max(0.1, min(1.0, duration - (time.time() - start)))
-            sniff(iface=iface, prn=handle, lfilter=_is_beacon_or_probe_resp,
+            # the socket stays open between calls: scapy closes only sockets it opened itself
+            sniff(opened_socket=sock, prn=handle, lfilter=_is_beacon_or_probe_resp,
                   store=False, timeout=chunk)
             store.commit()
             if control is not None:
@@ -132,6 +143,8 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
             hopper.stop()
         if writer is not None:
             writer.close()
+        if sock is not None:
+            sock.close()
         store.commit()
     return counter["n"]
 

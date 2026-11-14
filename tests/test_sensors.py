@@ -102,7 +102,7 @@ def test_capture_control_pause_and_hop(monkeypatch, tmp_path):
     ctl = CaptureControl()
     calls = {"n": 0}
 
-    def fake_sniff(iface, prn, lfilter, store, timeout):
+    def fake_sniff(prn, lfilter, store, timeout, opened_socket=None, iface=None):
         calls["n"] += 1
         if calls["n"] == 2:
             ctl.pause()
@@ -113,6 +113,7 @@ def test_capture_control_pause_and_hop(monkeypatch, tmp_path):
             stop.set()
     import scapy.sendrecv
     monkeypatch.setattr(scapy.sendrecv, "sniff", fake_sniff)
+    monkeypatch.setattr(collector, "_listen", lambda iface: type("S", (), {"close": lambda self: None})())
     stop = threading.Event()
     with Store(str(tmp_path / "x.db")) as st:
         n = collector.collect_live("wlan0mon", None, st, stop=stop, control=ctl)

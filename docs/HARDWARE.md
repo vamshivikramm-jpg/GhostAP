@@ -7,18 +7,25 @@ public sources report and must be checked on your machine.
 
 | Adapter | Chipset / USB ID | Driver | Kernel / distribution | Bands verified | Date |
 |---|---|---|---|---|---|
-| TP-Link Archer T2U Plus | RTL8821AU, `2357:0120` | out-of-tree `88XXau` (`rtl88XXau`) | 6.8.11-arm64, Kali Rolling 2024.3, VMware VM with USB pass-through | **2.4 GHz only** (channels 1–13 hopping) | 2026-11-14 |
+| TP-Link Archer T2U Plus | RTL8821AU, `2357:0120` | out-of-tree `88XXau` (`rtl88XXau`) | 6.8.11-arm64, Kali Rolling 2024.3, VMware VM with USB pass-through | 2.4 GHz (1–13, 80 min) and **5 GHz receive** (36–48, 149–161, 75 s check) | 2026-11-14 |
 
 What worked live: monitor mode via `tools/kali_monitor.sh`, channel hopping with `iw`,
 signal strength (dBm) on every frame, the tuned frequency in radiotap, FCS-flagged frames,
 about 30 stored frames per second from about 45 networks, zero damaged frames rejected in
-the last run. `iw` lists the 5 GHz channels 36–144, but **5 GHz capture was not tested**.
+the last run. A 75-second check hopping 2.4 and 5 GHz heard 14 radios on 5 GHz (417 frames,
+channels 36–48 and 149–157, including WPA3-transition). DFS channels (52–144) and a long 5 GHz
+run are not tested yet.
 Details: [testing/live-kali-validation.md](testing/live-kali-validation.md).
 
 Two effects of this setup that GhostAP now handles (both found in that test):
 - **The VM's clock is adjusted** (systemd-timesyncd and VMware Tools time sync). Capture
   timestamps drift by up to about 250 ppm, so clock drift is measured between access
   points, not against the sensor's clock.
+- **The tuned frequency in radiotap can be stale right after a hop.** 0.5 % of frames (8 of
+  1,640) carried a 5 GHz frequency while the AP advertises a 2.4 GHz channel (or the reverse);
+  7 of the 8 were the first frame after a channel change. Detection uses the AP's advertised
+  channel; the on-channel filter drops these frames. The Live radar's band label for an AP can
+  be wrong until its next frame. Planned: count this as a sensor-health metric (PLAN_3.0, O4).
 - **A strong nearby AP is also heard several channels away** while hopping (−8 dBm on its
   own channel, about −50 dBm seven channels off). Signal-level comparisons use only frames
   received on or next to the AP's own channel.

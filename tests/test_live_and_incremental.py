@@ -77,9 +77,20 @@ def test_live_capture_saves_pcap_and_hops(capture, tmp_path, monkeypatch):
     """Simulate `sniff` with frames from the synthetic capture (no root needed)."""
     from scapy.utils import rdpcap
     pkts = rdpcap(capture[0])[:40]
-    calls = {"n": 0}
+    calls = {"n": 0, "sockets": set()}
 
-    def fake_sniff(iface, prn, lfilter, store, timeout):
+    class Sock:
+        opened, closed = 0, 0
+
+        def __init__(self, iface):
+            Sock.opened += 1
+
+        def close(self):
+            Sock.closed += 1
+
+    def fake_sniff(prn, lfilter, store, timeout, opened_socket=None, iface=None):
+        assert iface is None and opened_socket is not None
+        calls["sockets"].add(id(opened_socket))
         if calls["n"] == 0:
             for p in pkts:
                 if lfilter(p):
@@ -88,6 +99,7 @@ def test_live_capture_saves_pcap_and_hops(capture, tmp_path, monkeypatch):
 
     import scapy.sendrecv
     monkeypatch.setattr(scapy.sendrecv, "sniff", fake_sniff)
+    monkeypatch.setattr("ghostap.collector._listen", Sock)
     hops = []
     monkeypatch.setattr("ghostap.hopper._iw", lambda iface, ch: hops.append(ch))
     out = str(tmp_path / "rec" / "live.pcap")
@@ -96,6 +108,9 @@ def test_live_capture_saves_pcap_and_hops(capture, tmp_path, monkeypatch):
         assert n == 40 and len(s.observations()) == 40
     assert len(rdpcap(out)) == 40                      # replayable / labelable later
     assert set(hops) <= {1, 6, 11} and hops
+    # one capture socket for the whole run, reused by every sniff() call, closed once
+    assert calls["n"] >= 2 and len(calls["sockets"]) == 1
+    assert Sock.opened == 1 and Sock.closed == 1
 
 
 # ----------------------------------------------------- incremental scoring

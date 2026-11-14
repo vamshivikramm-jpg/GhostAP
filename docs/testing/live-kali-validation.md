@@ -185,6 +185,17 @@ before and after.
 8. **No 5 GHz, no long run:** the longest run was 30 minutes; memory stayed at 113–128 MB.
    A multi-hour run and 5 GHz hopping are the next tests.
 
+### Follow-up live check (release 2.1, same day)
+
+75 s with `python -m ghostap.collector --iface wlan0 --hop 1,6,11,36,40,44,48,149,153,157,161`:
+- **Persistent capture socket:** the kernel log gained **2** "promiscuous mode" lines for the
+  whole run (one open, one close). Before the fix it gained about 2 per second (about 10,000
+  over the first test).
+- **5 GHz receive works:** 417 frames from 14 radios on 5 GHz (36–48, 149–157), 22 frames/s overall.
+- **Driver quirk:** 0.5 % of frames carried the frequency of the *next* channel (first frame
+  after a hop); harmless for detection, documented in HARDWARE.md.
+- `tools/kali_monitor.sh stop` now restores Wi-Fi by itself (wpa_supplicant restarted).
+
 ## 8. Performance (measured live)
 
 60-second sample in run3 (about 10 minutes in, about 40 networks, hotspot on):
