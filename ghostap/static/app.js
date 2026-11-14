@@ -310,7 +310,9 @@
     $("help-baseline").textContent = Math.round(s.baseline_seconds / 60);
     $("help-med").textContent = s.thresholds.medium;
     $("help-high").textContent = s.thresholds.high;
-    document.title = (s.alerts.HIGH ? `(${s.alerts.HIGH}) ` : "") + "GhostAP Dashboard";
+    // HIGH-alert count first, so it shows in the tab; then the page you are on
+    document.title = (s.alerts.HIGH ? `(${s.alerts.HIGH}) ` : "") +
+      (currentView !== "dashboard" && views[currentView] ? views[currentView].title + " · GhostAP" : "GhostAP Dashboard");
   }
 
   // ------------------------------------------------------------------ side panel
@@ -439,7 +441,9 @@
   function select(ssid, bssid, user) {
     state.sel = { ssid, bssid };
     if (user) markSeen((state.ghost || []).filter((a) => a.ssid === ssid && a.bssid === bssid));
-    try { history.replaceState(null, "", "#ap=" + encodeURIComponent(ssid) + "|" + encodeURIComponent(bssid)); } catch (e) { /* ignore */ }
+    if (currentView === "dashboard") {
+      try { history.replaceState(null, "", "#ap=" + encodeURIComponent(ssid) + "|" + encodeURIComponent(bssid)); } catch (e) { /* ignore */ }
+    }
     renderSide();
     renderTable();
     if (state.series.length) renderTimeline();
@@ -1397,7 +1401,7 @@
         if (changed("aps", aps)) renderTable();
         if (state.sel) loadDetail();
       }
-      if (!state.sel) {
+      if (!state.sel && currentView === "dashboard") {      // never steal the address bar from another page
         const v = readViewHash();
         if (v && v.ap) select(v.ap[0], v.ap[1], false);
         else if (state.ghost.length) select(state.ghost[0].ssid, state.ghost[0].bssid, false);
@@ -1482,7 +1486,7 @@
     return views[name] ? name : "dashboard";
   }
   // Four everyday pages in the bar; everything else in "More", each with a one-line purpose.
-  const PRIMARY = ["dashboard", "monitored", "sessions", "system"];
+  const PRIMARY = ["dashboard", "radar", "monitored", "sessions", "system"];
   const PURPOSE = {
     label: "Lab work: mark which access points were your test twin",
     evaluation: "Lab work: measure how accurate detection is on labelled captures",
@@ -1548,7 +1552,8 @@
 
   window.GA = {
     state, views, $, esc, css, rel, fmt, lvl, label, ssidLabel, IND, get, post, notice, uptime,
-    select: (ssid, bssid) => { location.hash = ""; select(ssid, bssid, true); },
+    // from another page: go to the dashboard with this access point open (the address says so too)
+    select: (ssid, bssid) => { location.hash = "ap=" + encodeURIComponent(ssid) + "|" + encodeURIComponent(bssid); select(ssid, bssid, true); },
     refresh: () => refresh(true, true), setSession, route, onRefresh: (fn) => hooks.push(fn),
     openHelp: () => openHelp(), openLayout: () => { applyLayout(); $("layout-dlg").showModal(); },
     toggleClock: () => $("clock-btn").click(), toggleTheme: () => $("theme-btn").click(),

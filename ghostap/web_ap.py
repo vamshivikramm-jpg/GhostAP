@@ -113,6 +113,61 @@ def register(app, ctx) -> None:
                         "series": [{"bssid": b, "points": p} for b, p in sorted(series.items(),
                                                                                key=lambda kv: kv[0] != bssid)]})
 
+    # ---------------------------------------------------------------- Live radar
+    @app.get("/api/live")
+    def live():
+        """Access points heard in the last `seconds` (capture time), for the live radar:
+        signal now (last 10 s), 5-second signal buckets for trails, channel, band, risk.
+        "Now" is the newest frame, so replays and past sessions work the same way."""
+        try:
+            seconds = max(10, min(600, int(request.args.get("seconds", 60))))
+        except ValueError:
+            seconds = 60
+        from . import vendors
+        from .parser import band_of
+        with ctx.store() as s:
+            now = s.conn.execute("SELECT MAX(last_seen) FROM ap_profiles").fetchone()[0]
+            if now is None:
+                return jsonify({"now": None, "seconds": seconds, "aps": []})
+            rows = s.conn.execute(
+                "SELECT ssid, bssid, CAST((ts - ?) / 5 AS INTEGER) AS b, AVG(rssi) AS rssi, COUNT(*) AS n, "
+                "MAX(ts) AS last, MAX(channel) AS ch, MAX(freq) AS freq "
+                "FROM observations WHERE ts > ? GROUP BY ssid, bssid, b ORDER BY ssid, bssid, b",
+                (now - seconds, now - seconds)).fetchall()
+            prof = {(p["ssid"], p["bssid"]): p for p in s.profiles()}
+            latest = s.latest()
+            t0 = s.conn.execute("SELECT MIN(first_seen) FROM ap_profiles").fetchone()[0]
+        b_end = t0 + ctx.cfg["baseline_minutes"] * 60
+        aps: dict = {}
+        for r in rows:
+            key = (r["ssid"], r["bssid"])
+            a = aps.setdefault(key, {"trail": [], "frames": 0, "last": 0.0, "ch": None, "freq": None})
+            if r["rssi"] is not None:
+                a["trail"].append([min(now, round(now - seconds + (r["b"] + 1) * 5, 1)), round(r["rssi"], 1)])
+            a["frames"] += r["n"]
+            a["last"] = max(a["last"], r["last"])
+            a["ch"] = r["ch"] if r["ch"] is not None else a["ch"]
+            a["freq"] = r["freq"] if r["freq"] is not None else a["freq"]
+        out = []
+        for (ssid, bssid), a in aps.items():
+            p = prof.get((ssid, bssid)) or {}
+            cur = latest.get((ssid, bssid)) or {}
+            recent = [v for t, v in a["trail"] if t > now - 10] or [v for _, v in a["trail"][-2:]]
+            out.append({
+                "ssid": ssid, "bssid": bssid, "vendor": vendors.name(bssid),
+                "rssi": round(sum(recent) / len(recent), 1) if recent else None,
+                "trail": a["trail"], "frames_per_s": round(a["frames"] / seconds, 2),
+                "channel": a["ch"], "band": band_of(a["freq"]) or ("5" if (a["ch"] or 0) > 14 else "2.4"),
+                "security": p.get("securities"), "first_seen": p.get("first_seen"),
+                "silent_s": round(now - a["last"], 1), "new": (p.get("first_seen") or 0) > now - seconds,
+                "known": (p.get("first_seen") or now) < b_end,
+                "level": cur.get("level"), "score": cur.get("score"),
+            })
+        out.sort(key=lambda x: (x["ssid"], x["bssid"]))
+        sn = ctx.cfg["sensors"]
+        return jsonify({"now": now, "seconds": seconds, "aps": out,
+                        "model": {"p0": sn["path_loss_p0"], "n": sn["path_loss_n"]}})
+
     # ---------------------------------------------------------------- F033
     @app.get("/api/ap/related")
     def ap_related():

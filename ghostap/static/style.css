@@ -660,4 +660,60 @@ details.tech > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 details.tech > summary .muted { font-weight: 400; font-size: 12.5px; margin-left: 6px; }
 details.tech[open] > summary { margin-bottom: 8px; }
 /* grid / flex children must be allowed to shrink, or one wide table widens the whole page on phones */
-main > *, .view[data-view="dashboard"] > *, .grid > *, .view-root > * { min-width: 0; }
+main > *, .view[data-view="dashboard"] > *, .grid > *, .view-root > *, .radar-grid > * { min-width: 0; }
+
+/* Live radar */
+.radar-filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px 14px; }
+.radar-filters input[type="search"] { flex: 1 1 200px; min-width: 0; }
+.radar-min { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--text-2); }
+.radar-min input { accent-color: var(--accent); }
+.radar-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .radar-grid { grid-template-columns: minmax(0, 1fr); } }
+.radar-card { padding: 12px; }
+.radar-wrap { position: relative; max-width: 640px; margin: 0 auto; }
+svg.radar { width: 100%; height: auto; display: block; touch-action: manipulation; }
+.radar .bg-in { stop-color: var(--accent); stop-opacity: .10; }
+.radar .bg-out { stop-color: var(--accent); stop-opacity: .02; }
+.radar .plate { stroke: var(--border); }
+.radar .ring { fill: none; stroke: var(--grid); stroke-width: 1; }
+.radar .ring-label { font-size: 11px; fill: var(--muted); }
+.radar .axis { stroke: var(--grid); stroke-width: 1; stroke-dasharray: 2 4; }
+.radar .me circle { fill: var(--accent-strong); }
+.radar .me text { font-size: 11px; fill: var(--text-2); }
+.radar .sweep { opacity: 0; }
+.radar.is-live .sweep { opacity: 1; animation: radar-sweep 6s linear infinite; }
+.radar .sw0 { stop-color: var(--accent); stop-opacity: .22; }
+.radar .sw1 { stop-color: var(--accent); stop-opacity: 0; }
+@keyframes radar-sweep { to { transform: rotate(360deg); } }
+.rdot { cursor: pointer; transition: transform 1.6s ease, opacity .4s; outline: none; }
+.rdot .mark { fill: var(--s-other); stroke: var(--surface); stroke-width: 1.5; }
+.rdot.lv-LOW .mark { fill: var(--accent); }
+.rdot.lv-MEDIUM .mark { fill: var(--serious); }
+.rdot.lv-HIGH .mark { fill: var(--critical); }
+.rdot .trail { stroke: var(--muted); stroke-width: 2; stroke-linecap: round; opacity: .45; }
+.rdot .dot-label { font-size: 12px; font-weight: 600; fill: var(--text); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; }
+.rdot.silent { opacity: .35; }
+.rdot.dim { opacity: .18; }
+.rdot.is-sel .mark, .rdot:focus-visible .mark { stroke: var(--text); stroke-width: 2.5; }
+.rdot:hover .mark { stroke: var(--text); }
+.rdot .pulse { fill: none; stroke: var(--accent); stroke-width: 2; animation: radar-pulse 1.6s ease-out infinite; }
+@keyframes radar-pulse { from { r: 6; opacity: .9; } to { r: 22; opacity: 0; } }
+.radar-legend .mark.lv-LOW { fill: var(--accent); } .radar-legend .mark.lv-MEDIUM { fill: var(--serious); } .radar-legend .mark.lv-HIGH { fill: var(--critical); }
+.radar-legend { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0 0; padding: 0; font-size: 12.5px; align-items: center; }
+.radar-legend li { display: flex; align-items: center; gap: 6px; }
+.radar-legend svg { width: 16px; height: 16px; }
+.pulse-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--accent); display: inline-block; }
+.radar-tip { position: absolute; z-index: 5; display: grid; gap: 2px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; width: 210px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 8px 24px rgba(0, 0, 0, .2); pointer-events: none; }
+.radar-side h2 { font-size: 18px; margin-bottom: 2px; word-break: break-word; }
+.radar-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 10px 0; font-size: 13.5px; }
+.radar-facts dt { color: var(--muted); }
+.radar-live { font-size: 13px; color: var(--text-2); display: inline-flex; gap: 6px; align-items: center; }
+.dot.live { animation: live-blink 1.4s ease-in-out infinite; }
+@keyframes live-blink { 50% { opacity: .35; } }
+.radar-table tr { cursor: pointer; }
+@media (prefers-reduced-motion: reduce) {
+  .radar.is-live .sweep { animation: none; opacity: 0; }
+  .rdot { transition: none; }
+  .rdot .pulse, .dot.live { animation: none; }
+}

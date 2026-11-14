@@ -49,7 +49,8 @@ def wait_done(url: str, timeout: float) -> dict:
     last = {}
     while time.time() < end:
         try:
-            with urllib.request.urlopen(url.rstrip("/") + "/api/summary", timeout=3) as r:  # noqa: S310 - local URL
+            base = url.split("#", 1)[0].rstrip("/")        # a page link like ".../#radar" is fine
+            with urllib.request.urlopen(base + "/api/summary", timeout=3) as r:  # noqa: S310 - local URL
                 last = json.load(r)
             if last.get("status", {}).get("state") in ("done", "stopped", "error"):
                 return last

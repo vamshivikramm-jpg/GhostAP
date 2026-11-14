@@ -115,3 +115,18 @@ def test_evidence_pcap_has_only_that_aps_beacons(client):
     audit = client.get("/api/audit?action=evidence.export").get_json()
     assert audit and audit[0]["detail"]["frames"] == len(pkts)
     assert client.get("/api/ap/evidence.pcap?ssid=MVSR_WiFi&bssid=11:22:33:44:55:66").status_code == 404
+
+
+def test_live_radar_endpoint(client):
+    r = client.get("/api/live?seconds=60").get_json()
+    aps = {a["bssid"]: a for a in r["aps"]}
+    assert r["seconds"] == 60 and set(r["model"]) == {"p0", "n"} and len(aps) == 4
+    twin = aps[EVIL]
+    assert twin["level"] == "HIGH" and not twin["known"] and twin["band"] == "2.4" and twin["channel"] == 11
+    assert twin["rssi"] > aps["a4:2b:b0:11:22:33"]["rssi"]              # the twin is the strongest signal
+    assert 10 <= len(twin["trail"]) <= 13 and all(t <= r["now"] for t, _ in twin["trail"])
+    assert all(a["known"] for b, a in aps.items() if b != EVIL)
+    assert client.get("/api/live?seconds=5").get_json()["seconds"] == 10   # clamped
+    assert client.get("/api/live?seconds=abc").get_json()["seconds"] == 60
+    short = client.get("/api/live?seconds=10").get_json()
+    assert all(len(a["trail"]) <= 3 for a in short["aps"])
