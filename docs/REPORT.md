@@ -309,9 +309,7 @@ Several implementation details matter for security and robustness:
   a change, and AP profiles are updated incrementally, so long live sessions stay
   responsive.
 
-![GhostAP dashboard after replaying the synthetic test capture: the twin of MVSR_WiFi is
-flagged HIGH (77/100) with its reasons and the comparison with the network's known access
-points](figures/dashboard.png)
+![GhostAP dashboard](figures/dashboard.png)
 
 *Figure: the dashboard after replaying the synthetic test capture
 (`python tools/screenshot_dashboard.py`).*
