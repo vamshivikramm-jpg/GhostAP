@@ -226,6 +226,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("\n[!] Interrupted - partial data saved to {}".format(args.db))
     finally:
         store.close()
+        from .ownership import give_back
+        give_back(files=[args.db, args.save_pcap])     # made under sudo -> back to the user
     return 0
 
 

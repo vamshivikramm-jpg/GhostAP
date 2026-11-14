@@ -118,7 +118,8 @@ class ChannelHopper:
                 return
             except Exception as e:  # channel not supported by this adapter / regulatory domain
                 self.dropped.append(ch)
-                self.channels.remove(ch)
+                if ch in self.channels:     # the list may have been replaced by reconfigure()
+                    self.channels.remove(ch)
                 if not self.channels:
                     self.error = "the adapter accepted none of the channels ({}: {})".format(
                         type(e).__name__, e)

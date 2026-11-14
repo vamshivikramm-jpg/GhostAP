@@ -36,7 +36,7 @@ from flask import Flask, Response, abort, jsonify, request, send_file, send_from
 
 from .pipeline import Pipeline
 from .sessions import SessionError, SessionStore
-from .config import ConfigError, load_config
+from .config import SETTINGS_OVERLAY, ConfigError, load_config
 from .storage import Store
 from . import vendors
 
@@ -694,6 +694,16 @@ def main(argv=None) -> int:
     app = create_app(db, cfg, pipe, token=token, local_only=local, sessions=sessions,
                      current_session=session.id if session else None, admin_db=admin_db,
                      config_path=args.config, monitored_path=args.monitored or cfg["monitored_networks"])
+    from .ownership import give_back
+
+    def hand_back_files() -> None:
+        # files made under sudo (live capture) go back to the user who ran sudo
+        give_back(files=[db, admin_db, save_pcap, args.monitored or cfg["monitored_networks"],
+                         SETTINGS_OVERLAY],
+                  trees=[cfg["sessions_dir"], os.path.dirname(cfg["logging"].get("file") or ""),
+                         os.path.dirname(tls_pair[0]) if args.https and tls_pair else None])
+
+    hand_back_files()
     mode = pipe.status["mode"]
     log.info("dashboard start: mode=%s source=%s session=%s monitored=%s host=%s port=%s",
              mode, pipe.status["source"], session.id if session else db,
@@ -727,6 +737,7 @@ def main(argv=None) -> int:
         current = app.extensions["ghostap"].pipeline     # the demo button may have replaced it
         if current is not None and current is not pipe:
             current.stop()
+        hand_back_files()
     return 0
 
 

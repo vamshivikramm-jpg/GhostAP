@@ -57,6 +57,7 @@ ghostap/web_*.py         admin, monitored, ap, tools (what-if, notes), demo, int
                          metrics, keys, OpenAPI), auth (Gate: keys, viewer links, accounts, token),
                          lab (report, bundle, labels, evaluation runner), settings, ai, sensors
 ghostap/auth.py, users.py, apikeys.py, tls.py    accounts/2FA/sessions, CLIs, certificates
+ghostap/ownership.py     files made under sudo (live capture) go back to the SUDO_UID user
 ghostap/notify.py, sensors.py, ai.py             notifications, multi-sensor + location, opt-in AI
 ghostap/evaluate.py (+ evaluate_extended.py, stats.py, kismet.py, whatif.py)
 ghostap/static/          index.html, app.js (core, window.GA), ux.js, present.js, i18n.js, login.*,
@@ -65,7 +66,7 @@ tools/                   make_test_pcap, make_eval_set (11 scenarios), build_sce
                          demo, sync_numbers, bench_large_site, screenshot_dashboard, kali_monitor.sh,
                          install_service.sh
 deploy/, Dockerfile, docker-compose.yml          systemd unit, container (not built here)
-tests/                   pytest (234 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
+tests/                   pytest (239 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
                          pip-audit, tests, evaluation smoke test, sync_numbers check)
 ```
 
