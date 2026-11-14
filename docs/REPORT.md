@@ -309,9 +309,12 @@ Several implementation details matter for security and robustness:
   a change, and AP profiles are updated incrementally, so long live sessions stay
   responsive.
 
-> _[Figure placeholder: screenshot of the dashboard during a replay, saved as
-> `docs/figures/dashboard.png`. Run `python tools/demo.py`, wait for the HIGH alert, then
-> take the screenshot.]_
+![GhostAP dashboard after replaying the synthetic test capture: the twin of MVSR_WiFi is
+flagged HIGH (77/100) with its reasons and the comparison with the network's known access
+points](figures/dashboard.png)
+
+*Figure: the dashboard after replaying the synthetic test capture
+(`python tools/screenshot_dashboard.py`).*
 
 ### 4.8 Performance on long captures
 
@@ -527,16 +530,26 @@ overstates performance.
 
 ### 7.3 Future work
 
-- Validate the beacon fingerprint on real hardware: record the lab's real APs and
-  several twin platforms (laptop with `hostapd`, phones, travel routers), and measure how
-  often their fingerprints collide.
-- Add timing-based fingerprints (beacon clock skew and jitter), which an attacker cannot
-  copy as easily as information elements. This is the most promising route to the s11
-  case.
-- Learn the weights (e.g. logistic regression) from labelled real captures, with
-  separate tuning and test sets.
-- Allow-lists of known BSSIDs supplied by the network administrator.
-- A smarter hopping schedule that spends more time on the channels the protected network uses.
+Several items that were listed here have since been built, but each still has to be
+validated on real captures before it can be reported as a result:
+
+- Timing fingerprints: beacon clock skew (with a significance test) and beacon-rate checks
+  are implemented. They are the most promising route to the s11 case, but have only been
+  exercised on synthetic frames.
+- Learned weights: `evaluate.py --extended` fits logistic-regression weights on a tune split
+  and scores them on a separate test split. On the synthetic set they are not better than the
+  configured weights; the configured weights stay in use.
+- Administrator allow-lists of known BSSIDs, saved per-network baselines, and a hopping
+  schedule that dwells longer on the protected network's channels are implemented.
+
+Still open:
+
+- Validate the beacon fingerprint on real hardware: record the lab's real APs and several
+  twin platforms (laptop with `hostapd`, phones, travel routers), and measure how often
+  their fingerprints collide.
+- Compare with Kismet's alerts on the same lab captures (the reader exists; Kismet has not
+  been run yet).
+- Measure the accuracy of the multi-sensor location estimate on a known floor plan.
 
 ### 7.4 Results on real lab captures (Phase 2)
 
@@ -590,11 +603,17 @@ python tools/demo.py                        # guided end-to-end demo + dashboard
 ## Appendix B: Repository layout
 
 ```
-ghostap/   parser, storage, collector, hopper, indicators, risk, pipeline, web, evaluate, static/
-tools/     make_test_pcap.py, make_eval_set.py, label_capture.py, demo.py,
-           make_architecture_figure.py
-tests/     83 pytest tests
-.github/   GitHub Actions workflow (tests on every push)
-docs/      REPORT.md, DEMO.md, figures/
-config.yaml, evaluate.py, requirements.txt, README.md
+ghostap/   capture (parser, storage, collector, hopper, capture), detection (indicators,
+           signatures, risk, pipeline), dashboard API (web*.py, auth, apikeys, tls),
+           integrations (notify, sensors, ai), evaluation (evaluate, evaluate_extended,
+           stats, kismet, whatif), static/ (dashboard front end)
+tools/     make_test_pcap.py, make_eval_set.py, build_scenario.py, label_capture.py, demo.py,
+           sync_numbers.py, bench_large_site.py, screenshot_dashboard.py,
+           make_architecture_figure.py, kali_monitor.sh, install_service.sh
+tests/     217 pytest tests
+deploy/, Dockerfile, docker-compose.yml   systemd service and container
+.github/   GitHub Actions workflow (lint, dependency audit, tests, evaluation, number check)
+docs/      REPORT.md, DEMO.md, ROADMAP.md, API.md, DEPLOY.md, PERFORMANCE.md,
+           ACCESSIBILITY.md, figures/
+config.yaml, evaluate.py, requirements.txt, requirements-ai.txt, README.md
 ```

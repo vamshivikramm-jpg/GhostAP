@@ -23,28 +23,39 @@ rate, detection latency) against a baseline that only flags duplicate SSIDs.
 | 5 | Dashboard | ✅ done |
 | 6 | Evaluation | ✅ done (synthetic set; rerun on Phase 2 captures) |
 | 7 | Report & demo | ✅ draft: [docs/REPORT.md](docs/REPORT.md) (Word: docs/REPORT.docx), [docs/DEMO.md](docs/DEMO.md) |
+| + | Feature expansion F001–F091 | ✅ built ([docs/ROADMAP.md](docs/ROADMAP.md)) |
+
+## Beyond the core (features F001–F091)
+
+All 91 features of the expansion catalogue are built; [docs/ROADMAP.md](docs/ROADMAP.md)
+lists each one and marks those that still need real hardware, your credentials or Phase 2
+captures to confirm (`done*`). Highlights:
+
+| Area | What you get | Docs |
+|---|---|---|
+| Detection | KARMA/MANA, look-alike names, attack-tool fingerprints, detailed security downgrade, deauth floods, two transmitters on one address, clock skew, beacon rate, Wi-Fi 6/6E, hidden networks, per-network sensitivity, incidents | `config.yaml` |
+| Saved baselines | Monitored networks page, baseline wizard, accept a change, new-network inbox, allow-list, network health | Monitored page |
+| Dashboard | incident story, filters and bulk triage, mutes, history, beacon diff, vendors, signal/uptime charts, evidence pcap, related APs, what-if weights, notes, clock time, CSV export, layout, tour, glossary, command palette (Ctrl/⌘K), colour-blind and high-contrast modes, Hindi/Telugu drafts, shareable links, demo + presentation mode | [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md), [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
+| Sessions and lab | sessions, labelling page with suggestions, evaluation page (confidence intervals, ROC/PR, tune/test split, learned weights, anomaly model, Kismet), scenario builder, session report and bundles, number sync | `python evaluate.py --extended` |
+| Operations | notifications (webhooks, ntfy, Telegram, Slack, e-mail, syslog/CEF), Prometheus metrics, API keys, accounts with roles and two-factor sign-in, viewer links, HTTPS, systemd service, Docker, settings page, several sensors with rough location, capture control | [docs/API.md](docs/API.md), [docs/DEPLOY.md](docs/DEPLOY.md) |
+| Opt-in AI | alert explainer and “Ask GhostAP” through the Claude API, off by default, names hidden from the model | `ai:` in `config.yaml` |
 
 ## Layout
 
 ```
-ghostap/parser.py      frame -> observation dict
-ghostap/storage.py     SQLite store (observations + ap_profiles)
-ghostap/collector.py   CLI entry point (offline pcap or live sniff)
-ghostap/indicators.py  baseline learning + 7 Evil Twin indicators
-ghostap/risk.py        weighted risk score, temporal smoothing, alerts, baseline detector
-config.yaml            indicator weights, thresholds, timing
-ghostap/pipeline.py    background replay / live ingest + periodic rescoring
-ghostap/web.py         Flask API + dashboard server
-ghostap/static/        dashboard front end (HTML/CSS/JS, Plotly)
-tools/make_test_pcap.py synthetic capture with one evil twin
-tools/make_eval_set.py  11 labelled synthetic scenarios for evaluation
-tools/label_capture.py  list APs in a real capture and write its labels file (Phase 2)
-tools/demo.py          guided end-to-end demo (opens the dashboard)
-tools/kali_monitor.sh  monitor mode on / off on Kali (check | start | stop)
-docs/                  project report, demo runbook, figures
-ghostap/evaluate.py    Phase 6 evaluation (also: python evaluate.py)
-tests/                 pytest suite
-data/                  captures and databases (gitignored)
+ghostap/parser.py, storage.py, collector.py, hopper.py, capture.py   capture and storage
+ghostap/indicators.py, signatures.py, risk.py, pipeline.py          detection and scoring
+ghostap/monitored.py, sessions.py, config.py, logs.py              baselines, sessions, settings
+ghostap/web*.py, auth.py, apikeys.py, users.py, tls.py              dashboard API, sign-in, HTTPS
+ghostap/notify.py, sensors.py, ai.py, vendors.py, beacons.py         integrations
+ghostap/evaluate.py, evaluate_extended.py, stats.py, kismet.py, whatif.py   evaluation
+ghostap/static/                dashboard (app.js + views/*.js, no inline scripts)
+tools/                         test data, scenarios, labelling, demo, benchmarks, screenshots,
+                               number sync, monitor mode, service install
+deploy/, Dockerfile            systemd unit and container
+docs/                          report, demo runbook, roadmap, API, deployment, figures
+tests/                         pytest suite
+data/, results/                captures, databases, evaluation output (gitignored)
 ```
 
 ## Quick demo

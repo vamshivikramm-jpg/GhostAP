@@ -25,31 +25,42 @@ dashboard. The README has user-facing docs; this file is the working context.
 | 2 labelled **real** lab captures | **next: needs Kali + monitor-mode adapter** (see `docs/KALI_SETUP.md` §7–8) |
 | 3 indicators (8) / 4 risk engine / 5 dashboard / 6 evaluation | done |
 | 7 report + demo | drafted: `docs/REPORT.md`, `docs/REPORT.docx`, `docs/DEMO.md` |
+| Feature expansion F001–F091 (phases A–J) | built; per-feature status in `docs/ROADMAP.md` (`done*` = needs hardware, credentials or Phase 2 data to confirm) |
 
 Open items in the report (marked `_[…]_`, yellow in the .docx): team names / guide /
-college, a dashboard screenshot (`docs/figures/dashboard.png`), **Section 7.4 real-capture
-results**, and academic references (do not invent citations; ask the user for theirs).
+college, **Section 7.4 real-capture results**, and academic references (do not invent
+citations; ask the user for theirs). REPORT.md is ahead of REPORT.docx (screenshot,
+section 7.3, appendix B): regenerate the .docx only after checking `git diff docs/REPORT.docx`.
 
 ## Layout
 
 ```
-ghostap/parser.py       frame -> observation dict (incl. beacon fingerprint hash)
-ghostap/storage.py      SQLite: observations, ap_profiles, alerts (+triage), risk_timeline, ap_latest;
-                        migrations in Store._migrate()
-ghostap/collector.py    CLI; collect_pcap / collect_live (--hop, --save-pcap)
-ghostap/hopper.py       channel hopping via `iw`
-ghostap/indicators.py   Baseline + 8 indicators + Analyzer (incremental add(), bisect windows)
-ghostap/risk.py         weighted score, smoothing, levels, alerts, benign causes,
-                        RiskEngine (resumable run()), duplicate-SSID baseline detector
-ghostap/pipeline.py     background replay / live ingest + IncrementalScorer
-ghostap/web.py          Flask API; ghostap/static/{index.html,style.css,app.js} dashboard
-ghostap/evaluate.py     metrics, threshold sweep, charts (also ./evaluate.py)
-tools/                  make_test_pcap.py, make_eval_set.py (11 scenarios), label_capture.py,
-                        demo.py, kali_monitor.sh, make_architecture_figure.py
-config.yaml             weights, thresholds, timing, known_bssids allow-list
-tests/                  pytest (83 tests); CI: .github/workflows/tests.yml (Py 3.11, 3.12, 3.13:
-                        ruff lint incl. security rules, pip-audit, tests, evaluation smoke test)
-pyproject.toml          ruff + pytest config (lint: `ruff check .`)
+ghostap/parser.py        frame -> observation dict (fingerprint + layout, rsn, freq); deauth events
+ghostap/storage.py       SQLite; tables incl. events, layouts, annotations, audit, mutes, notify_*,
+                         api_keys; migrations in Store._migrate()
+ghostap/collector.py, hopper.py, capture.py   pcap / live capture, channel hopping, pause + hop control
+ghostap/indicators.py    Baseline (+ saved baselines) + 8 indicators + Analyzer
+ghostap/signatures.py    KARMA, look-alike names, attack-tool library (score floors, not weights)
+ghostap/risk.py          score, smoothing, alerts, deauth/flood detectors, incidents, RiskEngine
+ghostap/pipeline.py      replay / live ingest + IncrementalScorer; Pipeline.control (capture.py)
+ghostap/config.py        defaults, validation, settings overlay data/settings.yaml (never edits config.yaml)
+ghostap/sessions.py      data/sessions/<id>/ (session.db, meta.json, capture.pcap, labels.json); bundles
+ghostap/monitored.py     saved baselines data/monitored.json
+ghostap/web.py           create_app + main (HTTP: waitress, HTTPS: cheroot); ctx holds db/pipeline/session
+ghostap/web_*.py         admin, monitored, ap, tools (what-if, notes), demo, integrations (notify,
+                         metrics, keys, OpenAPI), auth (Gate: keys, viewer links, accounts, token),
+                         lab (report, bundle, labels, evaluation runner), settings, ai, sensors
+ghostap/auth.py, users.py, apikeys.py, tls.py    accounts/2FA/sessions, CLIs, certificates
+ghostap/notify.py, sensors.py, ai.py             notifications, multi-sensor + location, opt-in AI
+ghostap/evaluate.py (+ evaluate_extended.py, stats.py, kismet.py, whatif.py)
+ghostap/static/          index.html, app.js (core, window.GA), ux.js, present.js, i18n.js, login.*,
+                         views/*.js (one page each, registered with GA.register)
+tools/                   make_test_pcap, make_eval_set (11 scenarios), build_scenario, label_capture,
+                         demo, sync_numbers, bench_large_site, screenshot_dashboard, kali_monitor.sh,
+                         install_service.sh
+deploy/, Dockerfile, docker-compose.yml          systemd unit, container (not built here)
+tests/                   pytest (217 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
+                         pip-audit, tests, evaluation smoke test, sync_numbers check)
 ```
 
 ## Commands
@@ -62,7 +73,11 @@ python tools/make_eval_set.py && python evaluate.py  # results/ (gitignored)
 python -m ghostap.web --pcap data/test_capture.pcap --speed 10   # dashboard replay :8050
 python -m ghostap.web --db data/live.db              # browse a recorded live session
 python tools/label_capture.py data/lab/run1.pcap [--evil <bssid>] [--attack-start +SECONDS]
-python evaluate.py --dataset data/lab --out results/lab [--unlabelled ignore]
+python evaluate.py --dataset data/lab --out results/lab [--unlabelled ignore] [--extended]
+python tools/sync_numbers.py [--write]               # docs quote the numbers in results/?
+python tools/build_scenario.py NAME --open --oui same   # custom synthetic scenario
+python -m ghostap.users add NAME --role admin        # first account turns sign-in on (prompts)
+python -m ghostap.apikeys create --name X --scope read
 ```
 
 `data/` and `results/` are gitignored. Captures and databases stay local.
@@ -87,9 +102,16 @@ python evaluate.py --dataset data/lab --out results/lab [--unlabelled ignore]
   through `esc()` in app.js, including Plotly legend names. The triage endpoint accepts
   JSON only (this blocks cross-site form posts). Keep both.
 - Static files are served with `max_age=0`. Keep it, or users see stale dashboards.
-- Web security (keep): Host-header check when bound to localhost (DNS rebinding), token
-  login when bound elsewhere, strict CSP (no inline scripts: keep all JS in app.js),
-  64 KB request limit, waitress server. See the docstring at the top of ghostap/web.py.
+- Web security (keep): Host-header check when bound to localhost (DNS rebinding); the Gate
+  in web_auth.py (API keys, viewer links, accounts, start-up token; role rules in
+  ADMIN_ONLY / allowed()); strict CSP (no inline scripts: all JS in static files);
+  JSON-only POSTs; 64 KB request limit. New admin-only endpoints go into ADMIN_ONLY.
+- Off by default and secrets only from environment variables: notifications, AI help
+  (ai.redact hides names from the model), sensor reporting. Tests use fake receivers /
+  a fake Claude client; nothing leaves the machine in tests.
+- Evaluation default outputs (results/per_ap.csv, metrics.csv) must stay byte-identical
+  when detection code changes unless results are meant to change; extras go behind
+  `--extended`. Signatures are score floors so they cannot shift these numbers.
 - `parse_frame()` rejects bad-FCS, truncated (caplen < wirelen) and malformed frames
   and counts them by reason. Never "repair" a damaged frame: it creates fake networks or
   makes WPA2 look open.
@@ -110,8 +132,9 @@ python evaluate.py --dataset data/lab --out results/lab [--unlabelled ignore]
 - Don't tune the alert threshold (or weights) on the data used to report results. The
   sweep says 15 gives a higher F1 on the synthetic set; the configured 30 is kept deliberately.
 - Keep the known limitation visible: s11 (twin that also copies the beacon structure) is missed.
-- If results change, update every place that quotes them: README.md, docs/REPORT.md,
-  docs/DEMO.md, tools/demo.py banner text, docs/figures/*.png (copy from results/).
+- If results change, run `python tools/sync_numbers.py --write` (README, REPORT.md, DEMO.md,
+  CLAUDE.md, figures; CI fails otherwise), then check the s01 breakdown and sweep text in
+  REPORT.md by hand and the tools/demo.py banner.
   Current synthetic results: GhostAP P 1.00 / R 0.83 / F1 0.91 / FPR 0.00, latency mean 16 s;
   baseline P 0.18 / R 1.00 / F1 0.31 / FPR 0.73; s01 twin peak 77.4.
 
