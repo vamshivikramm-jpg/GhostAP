@@ -13,7 +13,8 @@ from .auth import ABSOLUTE_S, COOKIE, ROLES, Auth, AuthError
 # What each role may do. Admin may do everything.
 ADMIN_ONLY = (re.compile(r"^/api/users"), re.compile(r"^/api/keys"), re.compile(r"^/api/sessions/[^/]+/delete$"),
               re.compile(r"^/api/demo/"), re.compile(r"^/api/settings(/reset)?$"),
-              re.compile(r"^/api/sensors/[^/]+/delete$"), re.compile(r"^/api/settings/effective$"))
+              re.compile(r"^/api/sensors/[^/]+/delete$"), re.compile(r"^/api/settings/effective$"),
+              re.compile(r"^/api/baselines/versions/\d+/(approve|reject|rollback)$"))
 VIEWER_POSTS = ("/api/logout",)
 # Read-only but sensitive: who did what (and from which address), where alerts are sent.
 NOT_FOR_VIEWERS = (re.compile(r"^/api/viewer_links"), re.compile(r"^/api/audit"), re.compile(r"^/api/notifications"),

@@ -220,9 +220,35 @@ def _m1_columns_before_versioning(conn) -> None:
                 conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, col, decl))
 
 
+def _m2_baseline_versions(conn) -> None:
+    """GhostAP 2.1: versions and approvals of the saved baseline (ghostap/baselines.py).
+    A database at this version is refused by older GhostAPs, which would ignore approvals."""
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS baseline_versions (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        version       INTEGER,                    -- set when applied (trusted); NULL while pending
+        status        TEXT NOT NULL,              -- pending | trusted | superseded | rejected
+        content       TEXT NOT NULL,              -- canonical JSON {networks, inventory}
+        sha256        TEXT NOT NULL,
+        base_version  INTEGER,                    -- version the change was proposed against
+        proposed_by   TEXT NOT NULL,
+        proposed_at   REAL NOT NULL,
+        approved_by   TEXT,                       -- or rejected by
+        approved_at   REAL,
+        action        TEXT NOT NULL,              -- e.g. baseline.learn, baseline.rollback
+        target        TEXT,
+        detail        TEXT,                       -- JSON
+        checks        TEXT,                       -- JSON list of contamination hits
+        reason        TEXT                        -- rejection reason
+    );
+    CREATE INDEX IF NOT EXISTS idx_baseline_versions_status ON baseline_versions(status);
+    """)
+
+
 # Ordered, never edited once released: add a new (version, function) for every change.
 MIGRATIONS = [
     (1, _m1_columns_before_versioning),
+    (2, _m2_baseline_versions),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 

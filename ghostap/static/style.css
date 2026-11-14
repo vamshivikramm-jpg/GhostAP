@@ -224,6 +224,7 @@ main { max-width: 1320px; margin: 0 auto; padding: 18px 24px 8px; display: grid;
 .tag.triage-investigating { border-color: var(--warning); background: var(--warn-soft); color: var(--text); }
 .tag.triage-confirmed { border-color: var(--critical); background: var(--critical-soft); color: var(--text); }
 .tag.triage-false_positive { border-color: var(--good); background: var(--good-soft); color: var(--text); }
+.tag.warn { border-color: var(--warning); background: var(--warn-soft); color: var(--text); }
 
 /* ---------------------------------------------------------------- detail */
 .detail { min-height: 420px; }
@@ -441,6 +442,11 @@ details.settings[open] > summary { margin-bottom: 10px; }
 .confirm { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 .list-plain { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .list-plain li { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--grid); }
+/* baseline versions: a pending change lists its learning-check warnings under it */
+.list-plain li.stack { flex-direction: column; align-items: stretch; }
+.list-plain li.stack .row-actions { justify-content: flex-start; }
+.list-plain .warn-list li { border-bottom: 0; padding: 2px 0; justify-content: flex-start; }
+.input.small { width: auto; min-width: 0; max-width: 200px; padding: 4px 8px; font-size: 13px; }
 @media (max-width: 640px) {
   .nav { order: 3; width: 100%; overflow-x: auto; flex-wrap: nowrap; }
   .nav-link { white-space: nowrap; }

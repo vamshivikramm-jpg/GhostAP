@@ -3,16 +3,23 @@
 Everything here edits data/monitored.json (the saved baseline) or the allow-list in the
 settings overlay. Changes are validated, written atomically, recorded in the audit log
 and applied to a running capture immediately.
+
+Baseline changes go through baselines.py: each applied change is a signed, numbered version;
+changes that need approval (analyst, two-person rule, contamination found while learning) are
+stored as proposals until an admin approves them (/api/baselines/...).
 """
 from __future__ import annotations
 
+import sqlite3
 import time
 
-from flask import jsonify
+from flask import jsonify, request
 
+from . import baselines as B
 from . import monitored as mon
 from .config import ConfigError, load_config, save_overlay
 from .parser import HIDDEN_SSID
+from .storage import Store
 
 _MAC_CHARS = set("0123456789abcdef:")
 
@@ -23,16 +30,53 @@ def _is_mac(s) -> bool:
 
 def register(app, ctx) -> None:
 
+    @app.errorhandler(B.IntegrityError)
+    def integrity_failed(e):
+        return jsonify({"error": str(e), "integrity": False}), 409
+
     def load():
         return mon.load(ctx.monitored_path)
 
-    def save_and_apply(data, action, target, detail=None):
-        mon.save(ctx.monitored_path, data)
-        ctx.audit(action, target, detail or {})
+    def role():
+        p = request.environ.get("ghostap.principal")
+        return p.get("role") if p else None                    # None: local mode, acts as admin
+
+    def admins() -> int:
+        try:
+            with Store(ctx.admin_db) as s:
+                return s.conn.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND NOT disabled").fetchone()[0]
+        except sqlite3.OperationalError:                       # no accounts table yet
+            return 0
+
+    def apply(data, action, target, detail, checks, proposer, approver, base, vid=None) -> int:
+        version = mon.save(ctx.monitored_path, data, version=base + 1)
+        with Store(ctx.admin_db) as s:
+            if vid is None:
+                B.record(s.conn, status="trusted", content=B.content_of(data), base_version=base, actor=proposer,
+                         action=action, target=target, detail=detail, checks=checks, version=version,
+                         approved_by=approver)
+            else:
+                B.approve(s.conn, vid, version, approver)
+        ctx.audit(action, target, dict(detail or {}, version=version, **({"proposal": vid} if vid else {})))
         if ctx.pipeline is not None:
             ctx.pipeline.update_monitored(
                 mon.baselines(data, ctx.cfg.get("known_bssids") or ()) or None,
                 {s: n.get("settings") or {} for s, n in data["networks"].items()})
+        return version
+
+    def commit(data, action, target, detail=None, checks=(), ok=None):
+        """Apply a baseline change now, or store it as a proposal (HTTP 202) when it needs approval."""
+        checks = list(checks)
+        base = mon.signed_version(load())
+        why = B.approval_needed(role(), admins(), checks)
+        if why:
+            with Store(ctx.admin_db) as s:
+                vid = B.record(s.conn, status="pending", content=B.content_of(data), base_version=base,
+                               actor=ctx.actor(), action=action, target=target, detail=detail, checks=checks)
+            ctx.audit("baseline.propose", target, {"action": action, "proposal": vid, "checks": len(checks)})
+            return jsonify({"pending": vid, "message": why, "checks": checks}), 202
+        version = apply(data, action, target, detail, checks, ctx.actor(), ctx.actor(), base)
+        return jsonify(dict(ok or {}, version=version))
 
     def session_profiles():
         with ctx.store() as s:
@@ -103,13 +147,14 @@ def register(app, ctx) -> None:
         learned = mon.learn(obs, ctx.cfg["baseline_minutes"], ssids, whole_capture=bool(body.get("whole")))
         if not learned:
             return jsonify({"error": "none of those networks were heard in this session"}), 400
+        checks = B.contamination(obs, ctx.cfg["baseline_minutes"], ssids, whole_capture=bool(body.get("whole")))
         data = load()
         names = mon.upsert(data, learned)
         for n in names:
             mon.set_decision(data, n, None)
-        save_and_apply(data, "baseline.learn", ", ".join(names),
-                       {"session": ctx.viewed_session() or ctx.current_session, "whole": bool(body.get("whole"))})
-        return jsonify({"saved": names})
+        return commit(data, "baseline.learn", ", ".join(names),
+                      {"session": ctx.viewed_session() or ctx.current_session, "whole": bool(body.get("whole"))},
+                      checks=checks, ok={"saved": names, "checks": checks})
 
     # ---------------------------------------------------------------- F011 settings
     @app.post("/api/monitored/settings")
@@ -127,8 +172,8 @@ def register(app, ctx) -> None:
             return jsonify({"error": str(e)}), 400
         data["networks"][ssid]["settings"] = settings
         off = sorted(k for k, v in settings["enabled"].items() if not v)
-        save_and_apply(data, "baseline.settings", ssid, {"off": off, "threshold_medium": settings["threshold_medium"]})
-        return jsonify(settings)
+        return commit(data, "baseline.settings", ssid, {"off": off, "threshold_medium": settings["threshold_medium"]},
+                      ok=settings)
 
     # ---------------------------------------------------------------- F017 accept / remove AP
     @app.post("/api/monitored/accept")
@@ -150,8 +195,8 @@ def register(app, ctx) -> None:
         mon.add_ap(data, ssid, {"bssid": bssid, "security": (prof["securities"] or "").split(",")[0] or None,
                                 "channels": [int(c) for c in (prof["channels"] or "").split(",") if c],
                                 "fingerprints": fps, "rssi_avg": prof["rssi_avg"]})
-        save_and_apply(data, "baseline.accept_ap", "{} {}".format(ssid, bssid), {"note": body.get("note") or ""})
-        return jsonify({"accepted": bssid, "network": ssid})
+        return commit(data, "baseline.accept_ap", "{} {}".format(ssid, bssid), {"note": body.get("note") or ""},
+                      ok={"accepted": bssid, "network": ssid})
 
     @app.post("/api/monitored/remove_ap")
     def monitored_remove_ap():
@@ -161,8 +206,8 @@ def register(app, ctx) -> None:
         data = load()
         if not mon.remove_ap(data, body.get("ssid"), body.get("bssid") or ""):
             return jsonify({"error": "not in that network's baseline"}), 404
-        save_and_apply(data, "baseline.remove_ap", "{} {}".format(body["ssid"], body["bssid"]))
-        return jsonify({"removed": body["bssid"]})
+        return commit(data, "baseline.remove_ap", "{} {}".format(body["ssid"], body["bssid"]),
+                      ok={"removed": body["bssid"]})
 
     @app.post("/api/monitored/remove")
     def monitored_remove():
@@ -176,8 +221,7 @@ def register(app, ctx) -> None:
         if body.get("confirm") != ssid:
             return jsonify({"error": "confirmation missing"}), 400
         del data["networks"][ssid]
-        save_and_apply(data, "baseline.remove_network", ssid)
-        return jsonify({"removed": ssid})
+        return commit(data, "baseline.remove_network", ssid, ok={"removed": ssid})
 
     # ---------------------------------------------------------------- F018 inbox
     @app.post("/api/monitored/inbox")
@@ -193,8 +237,93 @@ def register(app, ctx) -> None:
             mon.set_decision(data, ssid, None if decision == "reset" else decision)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
-        save_and_apply(data, "inventory." + str(decision), ssid)
-        return jsonify({"ssid": ssid, "decision": None if decision == "reset" else decision})
+        return commit(data, "inventory." + str(decision), ssid,
+                      ok={"ssid": ssid, "decision": None if decision == "reset" else decision})
+
+    # ---------------------------------------------------------------- versions and approvals
+    @app.get("/api/baselines/versions")
+    def baseline_versions():
+        data = load()
+        with Store(ctx.admin_db) as s:
+            rows = B.versions(s.conn)
+        n_admins, me, my_role = admins(), ctx.actor(), role()
+        for r in rows:
+            if r["status"] == "pending":
+                r["approve_error"] = B.approval_error(my_role, me, r["proposed_by"], n_admins)
+        return jsonify({"current_version": mon.signed_version(data), "signed": bool(data.get("integrity")),
+                        "sha256": (data.get("integrity") or {}).get("sha256"), "key_file": B.key_path(),
+                        "admins": n_admins, "two_person": n_admins >= 2,
+                        "you": {"name": me, "role": my_role or "admin"}, "versions": rows})
+
+    @app.get("/api/baselines/versions/<int:vid>")
+    def baseline_version(vid):
+        with Store(ctx.admin_db) as s:
+            v = B.get(s.conn, vid)
+        if v is None:
+            return jsonify({"error": "no such version"}), 404
+        v["diff"] = B.diff(B.content_of(load()), v["content"])
+        return jsonify(v)
+
+    def pending_or_error(vid):
+        with Store(ctx.admin_db) as s:
+            v = B.get(s.conn, vid)
+        if v is None:
+            return None, (jsonify({"error": "no such proposal"}), 404)
+        if v["status"] != "pending":
+            return None, (jsonify({"error": "this change is already {}".format(v["status"])}), 409)
+        return v, None
+
+    @app.post("/api/baselines/versions/<int:vid>/approve")
+    def baseline_approve(vid):
+        _, err = ctx.json_body()
+        if err:
+            return err
+        v, err = pending_or_error(vid)
+        if err:
+            return err
+        why = B.approval_error(role(), ctx.actor(), v["proposed_by"], admins())
+        if why:
+            return jsonify({"error": why}), 403
+        data = load()
+        base = mon.signed_version(data)
+        if v["base_version"] != base:
+            return jsonify({"error": "the baseline changed since this was proposed (version {} is now {}); "
+                                     "reject it and propose the change again".format(v["base_version"], base)}), 409
+        data["networks"], data["inventory"] = v["content"]["networks"], v["content"]["inventory"]
+        version = apply(data, v["action"], v["target"], v["detail"], v["checks"], v["proposed_by"],
+                        ctx.actor(), base, vid=vid)
+        ctx.audit("baseline.approve", v["target"], {"proposal": vid, "version": version, "by": v["proposed_by"]})
+        return jsonify({"approved": vid, "version": version})
+
+    @app.post("/api/baselines/versions/<int:vid>/reject")
+    def baseline_reject(vid):
+        body, err = ctx.json_body()
+        if err:
+            return err
+        v, err = pending_or_error(vid)
+        if err:
+            return err
+        reason = str(body.get("reason") or "")[:500]
+        with Store(ctx.admin_db) as s:
+            B.reject(s.conn, vid, ctx.actor(), reason)
+        ctx.audit("baseline.reject", v["target"], {"proposal": vid, "reason": reason})
+        return jsonify({"rejected": vid})
+
+    @app.post("/api/baselines/versions/<int:vid>/rollback")
+    def baseline_rollback(vid):
+        _, err = ctx.json_body()
+        if err:
+            return err
+        with Store(ctx.admin_db) as s:
+            v = B.get(s.conn, vid)
+        if v is None or v["status"] not in ("trusted", "superseded") or v["version"] is None:
+            return jsonify({"error": "only an applied version can be restored"}), 404
+        data = load()
+        if B.content_of(data) == v["content"]:
+            return jsonify({"error": "that version is already the current baseline"}), 409
+        data["networks"], data["inventory"] = v["content"]["networks"], v["content"]["inventory"]
+        return commit(data, "baseline.rollback", "to version {}".format(v["version"]), {"from_id": vid},
+                      ok={"restored": v["version"]})
 
     # ---------------------------------------------------------------- F019 allow-list
     @app.post("/api/allowlist")

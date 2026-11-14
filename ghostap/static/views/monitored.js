@@ -1,19 +1,51 @@
-/* Monitored networks page: saved baselines (F014-F019, F034, F035). */
+/* Monitored networks page: saved baselines (F014-F019, F034, F035), with versions and
+   approvals of the signed baseline (GhostAP 2.1, ghostap/baselines.py). */
 (function () {
   "use strict";
   const G = window.GA;
   const { esc, get, post, notice, fmt, rel, label, ssidLabel } = G;
   const CHECKS = ["security_downgrade", "new_bssid_oui", "channel_deviation", "rssi_jump", "tsf_anomaly",
     "ie_fingerprint", "bssid_conflict", "beacon_interval_mismatch", "karma", "lookalike_ssid", "known_tool"];
-  let root = null, data = null, showIgnored = false, confirming = null;
+  let root = null, data = null, versions = null, showIgnored = false, confirming = null;
 
   async function load() {
     try {
-      data = await get("/api/monitored");
+      [data, versions] = await Promise.all([get("/api/monitored"), get("/api/baselines/versions").catch(() => null)]);
       render();
     } catch (e) {
       root.innerHTML = `<div class="card empty">Could not load protected networks (${esc(e.message)}).</div>`;
     }
+  }
+
+  const ACTIONS = {
+    "baseline.learn": "learn", "baseline.settings": "change checks", "baseline.accept_ap": "accept access point",
+    "baseline.remove_ap": "remove access point", "baseline.remove_network": "stop protecting",
+    "baseline.rollback": "restore", "baseline.trust": "accept outside edit (CLI)",
+  };
+  const actionLabel = (a) => ACTIONS[a] || a.replace(/^inventory\./, "inbox: ");
+  const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString() : "");
+
+  function versionsCard() {
+    if (!versions) return "";
+    const pending = versions.versions.filter((v) => v.status === "pending");
+    const history = versions.versions.filter((v) => v.status === "trusted" || v.status === "superseded");
+    const rule = versions.two_person ? "Two-person rule: a second admin approves every change"
+      : "Changes by an admin apply directly; an analyst's changes, and baselines learned while something suspicious was on the air, wait for approval";
+    const pendingRow = (v) => `<li class="stack" data-version-row="${v.id}">
+        <span><b>${esc(actionLabel(v.action))}</b> ${esc(v.target || "")} <span class="muted">proposed by ${esc(v.proposed_by)} · ${esc(when(v.proposed_at))}</span></span>
+        ${v.checks.length ? `<ul class="list-plain warn-list">${v.checks.map((h) => `<li><span class="tag warn">${esc(h.check.replace(/_/g, " "))}</span> <span class="mono">${esc(h.bssid)}</span> ${esc(h.detail)}</li>`).join("")}</ul>` : ""}
+        <span class="row-actions">${v.approve_error ? `<span class="muted">${esc(v.approve_error)}</span>`
+          : `<button class="btn small primary" data-approve="${v.id}">Approve</button>`}
+          <input class="input small" data-reject-reason="${v.id}" placeholder="reason (optional)" aria-label="Reason for rejecting">
+          <button class="btn small" data-reject="${v.id}">Reject</button></span></li>`;
+    return `<section class="card"><div class="card-head"><h2>Versions and approvals</h2>
+        <span class="muted">${versions.signed ? "signed, version " + esc(String(versions.current_version)) : "not signed yet (saved before signing existed)"}</span></div>
+      <p class="hint">Every change to the saved baseline is a signed version. A file edited outside GhostAP is refused until someone reviews it (<span class="mono">python -m ghostap.monitored trust</span>). ${esc(rule)}.</p>
+      ${pending.length ? `<h3>Waiting for approval</h3><ul class="list-plain">${pending.map(pendingRow).join("")}</ul>` : '<p class="empty">No changes waiting for approval.</p>'}
+      ${history.length ? `<h3>History</h3><ul class="list-plain">${history.slice(0, 15).map((v) => `<li><span><b>v${esc(String(v.version))}</b> ${esc(actionLabel(v.action))} ${esc(v.target || "")}
+          <span class="muted">${esc(when(v.approved_at || v.proposed_at))} · by ${esc(v.proposed_by)}${v.approved_by && v.approved_by !== v.proposed_by ? ", approved by " + esc(v.approved_by) : ""}${v.checks.length ? " · approved despite " + v.checks.length + " warning" + (v.checks.length > 1 ? "s" : "") : ""}</span></span>
+          ${v.status === "trusted" ? '<span class="tag">current</span>' : `<button class="btn small" data-rollback="${v.id}">Restore</button>`}</li>`).join("")}</ul>` : ""}
+    </section>`;
   }
 
   function spark(points, level) {
@@ -122,12 +154,15 @@
         <form class="row-actions" id="allow-form" style="margin-top:10px" novalidate>
           <div class="field"><label for="allow-input">Add a BSSID</label><input class="input mono" id="allow-input" placeholder="a4:2b:b0:11:22:33" autocomplete="off" spellcheck="false"></div>
           <button class="btn" type="submit">Add</button></form>
-      </section>`;
+      </section>
+      ${versionsCard()}`;
   }
 
   async function act(promise, okText) {
     const r = await promise;
-    if (r.ok) { notice(okText, "ok"); await load(); G.refresh(); }
+    if (r.status === 202 && r.data && r.data.pending) {
+      notice("Not applied yet: " + r.data.message + ".", "warn"); await load();
+    } else if (r.ok) { notice(okText, "ok"); await load(); G.refresh(); }
     else notice((r.data && r.data.error) || "Something went wrong (" + r.status + ")", "error");
     return r.ok;
   }
@@ -167,6 +202,13 @@
       act(post("/api/allowlist", { remove: t.dataset.unallow }), "Removed from the allow-list.");
     } else if (t.dataset.inspectAp) {
       G.select(t.dataset.ssid, t.dataset.inspectAp);
+    } else if (t.dataset.approve) {
+      act(post(`/api/baselines/versions/${t.dataset.approve}/approve`, {}), "Approved and applied.");
+    } else if (t.dataset.reject) {
+      const reason = (root.querySelector(`[data-reject-reason="${t.dataset.reject}"]`) || {}).value || "";
+      act(post(`/api/baselines/versions/${t.dataset.reject}/reject`, { reason }), "Change rejected.");
+    } else if (t.dataset.rollback) {
+      act(post(`/api/baselines/versions/${t.dataset.rollback}/rollback`, {}), "Earlier version restored.");
     }
   }
 

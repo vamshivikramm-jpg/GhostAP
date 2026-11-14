@@ -54,7 +54,9 @@ ghostap/risk.py          score, smoothing, alerts, deauth/flood detectors, incid
 ghostap/pipeline.py      replay / live ingest + IncrementalScorer; Pipeline.control (capture.py)
 ghostap/config.py        defaults, validation, settings overlay data/settings.yaml (never edits config.yaml)
 ghostap/sessions.py      data/sessions/<id>/ (session.db, meta.json, capture.pcap, labels.json); bundles
-ghostap/monitored.py     saved baselines data/monitored.json
+ghostap/monitored.py     saved baselines data/monitored.json (CLI: save/show/remove/history/trust)
+ghostap/baselines.py     baseline signing (SHA-256 + HMAC, key outside data/), versions in admin.db,
+                         approval policy, contamination checks while learning
 ghostap/web.py           create_app + main (HTTP: waitress, HTTPS: cheroot); ctx holds db/pipeline/session
 ghostap/web_*.py         admin, monitored, ap, tools (what-if, notes), demo, integrations (notify,
                          metrics, keys, OpenAPI), auth (Gate: keys, viewer links, accounts, token),
@@ -69,7 +71,7 @@ tools/                   make_test_pcap, make_eval_set (11 scenarios), build_sce
                          demo, sync_numbers, bench_large_site, screenshot_dashboard, kali_monitor.sh,
                          install_service.sh
 deploy/, Dockerfile, docker-compose.yml          systemd unit, container (not built here)
-tests/                   pytest (251 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
+tests/                   pytest (265 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
                          pip-audit, tests, evaluation smoke test, sync_numbers check)
 ```
 
@@ -126,6 +128,13 @@ python -m ghostap.apikeys create --name X --scope read
   `Origin`s (local mode trusts localhost, so this is the CSRF defence). Keep it.
 - Database changes: add a `(version, function)` to `MIGRATIONS` in storage.py (never edit a
   released one) plus a test; `PRAGMA user_version` tracks it; newer databases are refused.
+- Saved baselines are signed (`baselines.py`): a file edited outside GhostAP is refused (API 409, start-up
+  exit 2) until `python -m ghostap.monitored trust --yes`. Every change is a version in admin.db
+  (`baseline_versions`, migration 2). Changes by analysts wait for an admin; with >= 2 admins a second
+  admin approves; contamination found while learning always waits for explicit approval. All baseline
+  writes go through `web_monitored.commit()` (or the CLI); never `mon.save` from elsewhere.
+- Tests never touch the real `data/` or `~/.config`: conftest sets a temp signing key and checks that the
+  real data/admin.db schema is unchanged. Tests that run a CLI or `web.main` pass their own config.
 - Live capture keeps one socket open for the whole run (`collector._listen`, `sniff(opened_socket=…)`);
   reopening it per call spammed the kernel log and dropped frames. Tests patch `_listen`.
 - Live detector memory is capped by `retention.memory_minutes` (prunes the Analyzer only;

@@ -194,12 +194,18 @@ def test_monitored_cli_save_show_remove(obs, tmp_path, capsys):
         for o in obs:
             s.add(o)
     path = str(tmp_path / "m.json")
+    # own config: the CLI records versions in <sessions_dir>/../admin.db, never the real data/
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(open(CONFIG).read() + "\nsessions_dir: {}/sessions\n".format(tmp_path))
     assert monitored.main(["save", "--db", db, "--ssid", "MVSR_WiFi",
-                           "--file", path, "--config", CONFIG]) == 0
-    assert monitored.main(["show", "--file", path, "--config", CONFIG]) == 0
+                           "--file", path, "--config", str(cfg)]) == 0
+    assert monitored.main(["show", "--file", path, "--config", str(cfg)]) == 0
     assert "MVSR_WiFi" in capsys.readouterr().out
-    assert monitored.main(["remove", "--ssid", "MVSR_WiFi", "--file", path, "--config", CONFIG]) == 0
+    assert monitored.main(["remove", "--ssid", "MVSR_WiFi", "--file", path, "--config", str(cfg)]) == 0
     assert monitored.load(path)["networks"] == {}
+    with Store(str(tmp_path / "admin.db")) as s:
+        assert [v["action"] for v in s.conn.execute("SELECT action FROM baseline_versions ORDER BY id")] == [
+            "baseline.learn", "baseline.remove_network"]
 
 
 def test_accepting_an_ap_into_the_baseline(obs):

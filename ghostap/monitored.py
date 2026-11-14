@@ -10,6 +10,11 @@ CLI:
     python -m ghostap.monitored save --db data/sessions/<id>/session.db [--ssid X ...]
     python -m ghostap.monitored show
     python -m ghostap.monitored remove --ssid X
+    python -m ghostap.monitored history                 # versions and approvals
+    python -m ghostap.monitored trust --yes             # accept a file changed outside GhostAP
+
+The file is signed (see baselines.py). The CLI is for the person at the machine (who can
+edit the file anyway): its changes apply directly and are recorded as versions in admin.db.
 """
 from __future__ import annotations
 
@@ -20,6 +25,7 @@ import sys
 import time
 from typing import Dict, Iterable, List, Optional
 
+from . import baselines as integrity
 from .indicators import INDICATOR_NAMES, Baseline, SSIDBaseline
 from .parser import HIDDEN_SSID
 
@@ -34,14 +40,17 @@ def empty() -> dict:
     return {"version": VERSION, "updated_at": None, "networks": {}}
 
 
-def load(path: Optional[str]) -> dict:
-    """The whole file (missing file = no monitored networks)."""
+def load(path: Optional[str], verify: bool = True) -> dict:
+    """The whole file (missing file = no monitored networks). A signed file whose content or
+    signature does not match raises integrity.IntegrityError (a ValueError); see baselines.py."""
     if not path or not os.path.exists(path):
         return empty()
     with open(path) as f:
         data = json.load(f)
     if not isinstance(data, dict) or not isinstance(data.get("networks"), dict):
         raise ValueError("{} is not a GhostAP monitored-networks file".format(path))
+    if verify:
+        integrity.verify(data, path)
     for net in data["networks"].values():
         s = net.setdefault("settings", default_settings())
         for n in INDICATOR_NAMES:                       # indicators added in later versions
@@ -50,14 +59,23 @@ def load(path: Optional[str]) -> dict:
     return data
 
 
-def save(path: str, data: dict) -> None:
+def signed_version(data: dict) -> int:
+    """Version number in the file's integrity block (0 = never signed)."""
+    return int((data.get("integrity") or {}).get("version") or 0)
+
+
+def save(path: str, data: dict, version: Optional[int] = None) -> int:
+    """Write the file atomically and sign it as `version` (default: the next one). Returns it."""
+    version = signed_version(data) + 1 if version is None else version
     data["version"] = VERSION
     data["updated_at"] = time.time()
+    data["integrity"] = integrity.sign(data, version)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w") as f:
         json.dump(data, f, indent=2, sort_keys=True)
     os.replace(tmp, path)
+    return version
 
 
 def baselines(data: dict, allowlist: Iterable[str] = ()) -> Dict[str, SSIDBaseline]:
@@ -163,7 +181,8 @@ def main(argv=None) -> int:
 
     ap = argparse.ArgumentParser(prog="python -m ghostap.monitored",
                                  description="Save, show or remove monitored networks (saved baselines).")
-    ap.add_argument("command", choices=("save", "show", "remove"))
+    ap.add_argument("command", choices=("save", "show", "remove", "history", "trust"))
+    ap.add_argument("--yes", action="store_true", help="trust: confirm after reviewing the file")
     ap.add_argument("--db", help="session database to learn from (save)")
     ap.add_argument("--ssid", action="append", default=[], help="network name (repeatable)")
     ap.add_argument("--whole", action="store_true",
@@ -180,7 +199,47 @@ def main(argv=None) -> int:
     if not path:
         print("[!] monitored_networks is empty in config.yaml; pass --file", file=sys.stderr)
         return 2
-    data = load(path)
+    admin_db = os.path.join(os.path.dirname(cfg["sessions_dir"].rstrip("/")) or ".", "admin.db")
+    actor = "cli:" + (os.environ.get("SUDO_USER") or os.environ.get("USER") or "unknown")
+
+    def recorded(version: int, action: str, target: str) -> None:
+        with Store(admin_db) as st:
+            integrity.record(st.conn, status="trusted", content=integrity.content_of(data), base_version=version - 1,
+                             actor=actor, action=action, target=target, version=version, approved_by=actor)
+            st.audit(actor, action, target, {"version": version})
+
+    if args.command == "history":
+        with Store(admin_db) as st:
+            rows = integrity.versions(st.conn)
+        if not rows:
+            print("[i] no recorded versions yet")
+        for r in rows:
+            print("{:>4}  v{:<4} {:<10} {:<20} {:<24} by {}{}".format(
+                r["id"], r["version"] if r["version"] is not None else "-", r["status"], r["action"],
+                (r["target"] or "")[:24], r["proposed_by"],
+                ", approved by " + r["approved_by"] if r["approved_by"] and r["status"] != "rejected" else ""))
+        return 0
+    if args.command == "trust":
+        data = load(path, verify=False)
+        try:
+            integrity.verify(data, path)
+            print("[i] {} is already correctly signed; nothing to do".format(path))
+            return 0
+        except integrity.IntegrityError as e:
+            print("[!] " + str(e))
+        print("[i] it holds {} network(s): {}".format(len(data["networks"]), ", ".join(sorted(data["networks"]))))
+        if not args.yes:
+            print("[i] review the file, then re-run with --yes to accept it as a new version", file=sys.stderr)
+            return 1
+        v = save(path, data)
+        recorded(v, "baseline.trust", path)
+        print("[+] accepted and signed as version {}".format(v))
+        return 0
+    try:
+        data = load(path)
+    except integrity.IntegrityError as e:
+        print("[!] {}".format(e), file=sys.stderr)
+        return 2
 
     if args.command == "show":
         if not data["networks"]:
@@ -197,7 +256,7 @@ def main(argv=None) -> int:
             ap.error("remove needs --ssid")
         for s in args.ssid:
             data["networks"].pop(s, None)
-        save(path, data)
+        recorded(save(path, data), "baseline.remove_network", ", ".join(args.ssid))
         print("[+] removed {} from {}".format(", ".join(args.ssid), path))
         return 0
     if not args.db or not os.path.exists(args.db):
@@ -209,7 +268,7 @@ def main(argv=None) -> int:
         print("[!] nothing to save (no matching networks in {})".format(args.db), file=sys.stderr)
         return 1
     names = upsert(data, learned)
-    save(path, data)
+    recorded(save(path, data), "baseline.learn", ", ".join(names))
     print("[+] saved {} network(s) to {}: {}".format(len(names), path, ", ".join(names)))
     return 0
 

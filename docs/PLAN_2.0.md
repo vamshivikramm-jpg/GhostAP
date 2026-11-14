@@ -3,7 +3,10 @@
 > **Status (kept up to date).** Approved 14 Nov 2026.
 > - **Phase 0 (Stabilise): done** (commit `3f2482d`). After it: simpler dashboard (`810207a`), Live radar
 >   page (`23b0ef7`), radar error/empty states and UI fixes (`5250ac7`).
-> - **Next:** Phase 1 (real lab captures on the sensor, `docs/KALI_SETUP.md` §7-8), then Phase 2 (Integrity).
+> - **Phase 1 (real captures): started** 14 Nov 2026 (3 live runs, `docs/testing/live-kali-validation.md`).
+> - **Phase 2 (Integrity), baseline part: done** in release 2.1: signed baselines (SHA-256 + HMAC, key outside
+>   `data/`), versions with rollback, approval (admin-only, two-person with ≥ 2 admins), contamination checks
+>   while learning (`ghostap/baselines.py`). The hash-chained audit moves to Phase 3 with the evidence work.
 > - **Answers to section 21:** one sensor only, a TP-Link Archer T2U Plus (RTL8821AU, 2.4/5 GHz, **no 6 GHz**;
 >   see `docs/HARDWARE.md`), so no multi-sensor lab tests and no 6 GHz / Wi-Fi 7 validation on own hardware.
 >   PDF report at the very end, not now. No deadline. The public AWID3 dataset may be used (ML phase).

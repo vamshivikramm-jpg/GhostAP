@@ -321,6 +321,8 @@ This returns the adapter to normal (managed) mode and restarts NetworkManager.
 | Status bar: *unsupported: 36,40…* | The adapter is 2.4 GHz only, or 5 GHz is not allowed in the current regulatory domain. Harmless; those channels are skipped |
 | The twin is never flagged | It was switched on during the 2-minute learning period, so it was learned as normal. Restart GhostAP and switch the twin on afterwards. Also check it uses *exactly* the same SSID |
 | Everything is flagged MEDIUM | The learning period was too short for a busy place. Set `baseline_minutes: 5` in `config.yaml` |
+| *saved baseline … was changed outside GhostAP* | Someone edited `data/monitored.json` by hand. Review it, then `python -m ghostap.monitored trust --yes` (or restore a backup) |
+| *… is signed, but the signing key … is missing* | The baseline was signed by another user (e.g. you ran `sudo` before). Run with the same user, set `GHOSTAP_BASELINE_KEY_FILE`, or review and `trust` it |
 | No internet after testing | `sudo tools/kali_monitor.sh stop wlan1` (or `sudo systemctl start NetworkManager`) |
 | `git clone` asks for a password | Use a GitHub personal access token, not your GitHub password |
 | VM: no `wlan1` at all | The USB adapter isn't passed through to the VM (see section 0). Check with `lsusb` |

@@ -52,6 +52,28 @@ Add `?session=<id>` to a GET to read a past session (ids from `GET /api/sessions
 | `GET /api/timeline?top=30&points=800` | risk lines (bounded for large sites) |
 | `POST /api/alerts/<id>/triage` | `{"status": "new|investigating|confirmed|false_positive", "note": "…"}` |
 | `GET /metrics` | Prometheus metrics |
+| `GET /api/baselines/versions` | saved-baseline versions, pending changes and whether you may approve them |
+| `GET /api/baselines/versions/<id>` | one version or proposal, with its content and a diff against the current baseline |
+| `POST /api/baselines/versions/<id>/approve` · `/reject` · `/rollback` | admin only, body `{}` (reject: `{"reason": "…"}`) |
+
+### Saved baselines: signing, versions and approval
+
+Every change to the saved baseline (`data/monitored.json`) is a signed, numbered version
+(`ghostap/baselines.py`). The signing key lives outside `data/`:
+`~/.config/ghostap/baseline.key`, or the file named by `GHOSTAP_BASELINE_KEY_FILE`.
+A file edited outside GhostAP is refused, by the API (HTTP 409) and at start-up, until someone
+reviews it and runs `python -m ghostap.monitored trust --yes`.
+
+The `POST /api/monitored/*` endpoints answer **200** with `"version"` when the change was applied,
+and **202** with `"pending"` and `"message"` when it waits for approval:
+- an analyst's change waits for an admin;
+- with two or more admins, every change waits for a *second* admin;
+- a baseline learned while the learning checks found possible signs of an attack (KARMA,
+  look-alike names, tool fingerprints, two transmitters on one address, open and protected access
+  points sharing a name, a freshly booted access point next to long-running ones) waits for an
+  explicit approval, even from a lone admin.
+
+`python -m ghostap.monitored history` lists the versions from the command line.
 
 ## Prometheus / Grafana (F060)
 
