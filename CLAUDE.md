@@ -26,6 +26,12 @@ dashboard. The README has user-facing docs; this file is the working context.
 | 3 indicators (8) / 4 risk engine / 5 dashboard / 6 evaluation | done |
 | 7 report + demo | drafted: `docs/REPORT.md`, `docs/REPORT.docx`, `docs/DEMO.md` |
 | Feature expansion F001–F091 (phases A–J) | built; per-feature status in `docs/ROADMAP.md` (`done*` = needs hardware, credentials or Phase 2 data to confirm) |
+| GhostAP 2.0 (`docs/PLAN_2.0.md`) | Phase 0 done; dashboard simplified; Live radar page; next: Phase 1 real captures, then Phase 2 Integrity |
+
+User decisions for 2.0 (keep): **one sensor only** (TP-Link Archer T2U Plus, RTL8821AU, 2.4/5 GHz,
+no 6 GHz: no multi-sensor lab tests or 6 GHz validation on own hardware); **PDF report last**, not now;
+**no deadline**; the public **AWID3** dataset may be used for the ML phase. Not answered yet: team size
+(two-person baseline approval?) and CI status. Commit locally, then ask before pushing.
 
 Open items in the report (marked `_[…]_`, yellow in the .docx): team names / guide /
 college, **Section 7.4 real-capture results**, and academic references (do not invent
@@ -59,7 +65,7 @@ tools/                   make_test_pcap, make_eval_set (11 scenarios), build_sce
                          demo, sync_numbers, bench_large_site, screenshot_dashboard, kali_monitor.sh,
                          install_service.sh
 deploy/, Dockerfile, docker-compose.yml          systemd unit, container (not built here)
-tests/                   pytest (233 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
+tests/                   pytest (234 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
                          pip-audit, tests, evaluation smoke test, sync_numbers check)
 ```
 
@@ -111,7 +117,11 @@ python -m ghostap.apikeys create --name X --scope read
   `tests/test_memory_bound.py` checks scores are identical). Indicators may only look at the
   scoring window, each AP's first `Analyzer.HEAD` frames and TSF resets.
 - Sensor hardware: one TP-Link Archer T2U Plus (RTL8821AU, 2.4/5 GHz, no 6 GHz); see
-  docs/HARDWARE.md. GhostAP 2.0 plan: Phase 0 done; next phases in the 2.0 proposal.
+  docs/HARDWARE.md. GhostAP 2.0 plan and phase status: docs/PLAN_2.0.md.
+- Dashboard UI: simple by default (primary nav Dashboard, Live radar, Protected networks, Sessions,
+  System; the rest under More; extra controls only in Advanced view via `.adv`). Live radar
+  (views/radar.js, `GET /api/live`): distance = signal strength, angle is a stable hash of the SSID
+  (direction is not measured with one antenna). Page headings must match their menu names.
 - Web security (keep): Host-header check when bound to localhost (DNS rebinding); the Gate
   in web_auth.py (API keys, viewer links, accounts, start-up token; role rules in
   ADMIN_ONLY / allowed()); strict CSP (no inline scripts: all JS in static files);
