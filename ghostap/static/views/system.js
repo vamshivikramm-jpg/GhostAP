@@ -17,7 +17,8 @@
     let h, q, a;
     try {
       [h, q, a] = await Promise.all([get("/api/health"), get("/api/quality"),
-        get("/api/audit?limit=100" + (auditFilter ? "&action=" + encodeURIComponent(auditFilter) : ""))]);
+        // analysts and admins only: a viewer gets 403 and simply sees no audit log
+        get("/api/audit?limit=100" + (auditFilter ? "&action=" + encodeURIComponent(auditFilter) : "")).catch((e) => (e.status === 403 ? null : Promise.reject(e)))]);
     } catch (e) {
       main.innerHTML = `<div class="card empty">Could not load system information (${esc(e.message)}).</div>`;
       return;
@@ -26,6 +27,8 @@
     const silent = h.last_frame_age_s != null && h.last_frame_age_s > 15;
     const damaged = Object.values(q.damaged_frames || {}).reduce((x, y) => x + y, 0);
     const maxCh = Math.max(1, ...q.channels.map((c) => c.frames));
+    const auditHidden = a === null;
+    if (auditHidden) a = [];
     const actions = [...new Set(a.map((r) => r.action))].sort();
     main.innerHTML = `<div class="page-head"><div><h1>System</h1>
         <p>Health of this GhostAP server and of the capture, plus a record of every change analysts made.</p>
@@ -60,6 +63,7 @@
         ${a.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>What</th><th>Details</th></tr></thead>
           <tbody>${a.map((r) => `<tr><td class="num">${new Date(r.ts * 1000).toLocaleString()}</td><td>${esc(r.actor)}</td><td class="mono">${esc(r.action)}</td>
             <td>${esc(r.target || "")}</td><td class="reason">${esc(Object.entries(r.detail || {}).map(([k, v]) => k + ": " + (typeof v === "object" ? JSON.stringify(v) : v)).join(" · "))}</td></tr>`).join("")}</tbody></table></div>`
+          : auditHidden ? '<p class="empty">The audit log is visible to analysts and admins.</p>'
           : '<p class="empty">Nothing recorded yet. Triage changes, baseline edits and settings changes appear here.</p>'}
       </section>`;
   }
@@ -68,11 +72,16 @@
   // Rendered separately from the 5-second refresh so forms and a new key stay on screen.
   async function loadIntegrations() {
     let n, keys, cap;
-    try { [n, keys, cap] = await Promise.all([get("/api/notifications"), get("/api/keys"), get("/api/capture")]); } catch (e) {
+    // each part may be forbidden for this role (403): show what is allowed instead of failing
+    const opt = (url) => get(url).catch((e) => (e.status === 403 ? null : Promise.reject(e)));
+    try { [n, keys, cap] = await Promise.all([opt("/api/notifications"), opt("/api/keys"), get("/api/capture")]); } catch (e) {
       integ.innerHTML = `<div class="card empty">Could not load integrations (${esc(e.message)}).</div>`;
       return;
     }
     const when = (t) => (t ? new Date(t * 1000).toLocaleString() : "–");
+    const notifHidden = n === null, keysHidden = keys === null;
+    if (notifHidden) n = { enabled: false, running: false, channels: [], problems: [], log: [], rules: {} };
+    if (keysHidden) keys = [];
     integ.innerHTML = (cap.live ? `<section class="card"><div class="card-head"><h2>Capture control <span class="muted">${esc(cap.iface || "")}</span></h2>
         <button class="btn small ${cap.paused ? "primary" : ""}" data-cap="${cap.paused ? "resume" : "pause"}">${cap.paused ? "Resume" : "Pause"}</button></div>
         <p>${cap.paused ? `<b>Paused</b> since ${new Date(cap.paused_since * 1000).toLocaleTimeString()} (${cap.dropped_while_paused} frames ignored). Nothing is scored while paused; the timeline shows the gap.` : "Capturing."} ${esc(cap.hopping || "")}</p>
@@ -81,7 +90,7 @@
         <button class="btn" type="submit">Apply</button></form></section>` : "") + `<section class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
       <div class="card"><div class="card-head"><h2>Notifications <span class="muted">${n.enabled ? (n.running ? "on" : "on, no channel running") : "off"}</span></h2>
           ${n.channels.length ? '<button class="btn small" data-notify-test>Send a test message</button>' : ""}</div>
-        ${n.enabled ? "" : '<p class="hint">Switched off. Set <span class="mono">notifications.enabled: true</span> and add a webhook, ntfy topic, e-mail or syslog target in config.yaml (examples there). Secrets go in environment variables.</p>'}
+        ${notifHidden ? '<p class="hint">Notification settings are visible to analysts and admins.</p>' : n.enabled ? "" : '<p class="hint">Switched off. Set <span class="mono">notifications.enabled: true</span> and add a webhook, ntfy topic, e-mail or syslog target in config.yaml (examples there). Secrets go in environment variables.</p>'}
         ${n.problems.map((p) => `<div class="banner error">${esc(p)}</div>`).join("")}
         ${n.channels.length ? `<ul class="list-plain">${n.channels.map((c) => `<li><b>${esc(c.name)}</b> <span class="mono">${esc(c.target)}</span> <span class="muted">from ${esc(c.min_level)}</span></li>`).join("")}</ul>
           <p class="muted small">Sends when an alert reaches ${esc(n.rules.min_level)}, when it becomes HIGH, and every ${n.rules.realert_minutes} min while it stays active · at most ${n.rules.max_per_minute} per channel per minute · muted and false-positive alerts are skipped.</p>` : ""}
@@ -93,12 +102,13 @@
       </div>
       <div class="card"><div class="card-head"><h2>API keys <span class="muted">for scripts, Grafana, a SIEM</span></h2>
           <a class="btn small" href="/api/openapi.json" target="_blank" rel="noopener">API description (OpenAPI)</a></div>
+        ${keysHidden ? '<p class="hint">Admins create and revoke API keys.</p>' : ""}
         ${newKey ? `<div class="notice-box"><b>New key for ${esc(newKey.name)}.</b> Copy it now; it is not shown again.<br><code class="mono" style="word-break:break-all">${esc(newKey.key)}</code><br><span class="muted">Send it as <span class="mono">Authorization: Bearer &lt;key&gt;</span>. Prometheus/Grafana: scrape <span class="mono">/metrics</span> with it.</span></div>` : ""}
-        <form class="key-form" data-key-form autocomplete="off">
+        <form class="key-form" data-key-form autocomplete="off" ${keysHidden ? "hidden" : ""}>
           <label class="sr-only" for="key-name">Key name</label><input class="input" id="key-name" maxlength="60" required placeholder="Name, e.g. grafana">
           <label class="sr-only" for="key-scope">Permission</label><select class="input" id="key-scope"><option value="read">read only</option><option value="write">read and change</option></select>
           <button class="btn" type="submit">Create key</button></form>
-        ${keys.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Key</th><th>Permission</th><th>Last used</th><th></th></tr></thead><tbody>
+        ${keysHidden ? "" : keys.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Key</th><th>Permission</th><th>Last used</th><th></th></tr></thead><tbody>
           ${keys.map((k) => `<tr class="${k.revoked ? "dismissed" : ""}"><td>${esc(k.name)}</td><td class="mono">${esc(k.prefix)}…</td><td>${esc(k.scope)}</td><td class="num">${when(k.last_used)}</td>
             <td>${k.revoked ? '<span class="muted">revoked</span>' : `<button class="btn small danger" data-key-revoke="${k.id}">Revoke</button>`}</td></tr>`).join("")}</tbody></table></div>` : '<p class="empty">No API keys.</p>'}
       </div></section>`;

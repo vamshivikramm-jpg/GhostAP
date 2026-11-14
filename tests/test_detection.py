@@ -128,14 +128,35 @@ def test_signatures_cli_adds_a_lab_fingerprint(tmp_path):
 def test_rsn_details_are_parsed():
     p = RadioTap(bytes(make_test_pcap.make_beacon("Lab", LEGIT, 6, True, -40, 1000, 1)))
     from scapy.layers.dot11 import Dot11Beacon
-    assert parse_rsn(p[Dot11Beacon]) == "pw=CCMP;akm=PSK;pmf=none"
+    assert parse_rsn(p[Dot11Beacon]) == "pw=CCMP;akm=PSK;pmf=none;grp=CCMP"
 
+
+def _rsn_body(raw):
+    from scapy.layers.dot11 import Dot11Beacon, Dot11Elt
+    # serialise and parse back, like a captured frame (element lengths are filled in)
+    return Dot11Beacon(bytes(Dot11Beacon() / Dot11Elt(ID=0, info=b"Lab") / Dot11Elt(ID=48, info=raw)))
+
+
+def test_group_and_management_ciphers_are_parsed():
+    suite = lambda t: b"\x00\x0f\xac" + bytes([t])  # noqa: E731 - IEEE 802.11 OUI + suite type
+    # version 1, group TKIP, 1 pairwise CCMP, 1 AKM SAE, caps MFPR+MFPC, 0 PMKIDs, group mgmt BIP-CMAC-128
+    raw = (b"\x01\x00" + suite(2) + b"\x01\x00" + suite(4) + b"\x01\x00" + suite(8) + b"\xc0\x00"
+           + b"\x00\x00" + suite(6))
+    assert parse_rsn(_rsn_body(raw)) == "pw=CCMP;akm=SAE;pmf=required;grp=TKIP;gmgmt=BIP-CMAC-128"
+    # OWE (AKM 18), no group management cipher
+    raw = b"\x01\x00" + suite(4) + b"\x01\x00" + suite(4) + b"\x01\x00" + suite(18) + b"\x80\x00"
+    assert parse_rsn(_rsn_body(raw)) == "pw=CCMP;akm=OWE;pmf=capable;grp=CCMP"
+    truncated = parse_rsn(_rsn_body(b"\x01\x00\x00"))                  # must not raise
+    assert truncated is None or "grp=" not in truncated
 
 @pytest.mark.parametrize("base_rsn, twin_rsn, value, words", [
     ("pw=CCMP;akm=802.1X;pmf=capable", "pw=CCMP;akm=PSK;pmf=capable", 1.0, "enterprise"),
     ("pw=CCMP;akm=SAE;pmf=required", "pw=CCMP;akm=SAE,PSK;pmf=capable", 0.8, "WPA3 transition"),
     ("pw=CCMP;akm=PSK;pmf=none", "pw=TKIP;akm=PSK;pmf=none", 1.0, "TKIP"),
     ("pw=CCMP;akm=PSK;pmf=required", "pw=CCMP;akm=PSK;pmf=none", 0.8, "protected management frames"),
+    ("pw=CCMP;akm=PSK;pmf=none;grp=CCMP", "pw=CCMP;akm=PSK;pmf=none;grp=TKIP", 0.8, "group cipher"),
+    ("pw=CCMP;akm=PSK;pmf=none;grp=CCMP", "pw=CCMP;akm=OWE;pmf=capable;grp=CCMP", 0.9, "OWE"),
+    ("pw=CCMP;akm=SAE;pmf=required", "pw=CCMP;akm=OWE;pmf=required", 0.9, "OWE"),
 ])
 def test_detailed_security_downgrade(base_rsn, twin_rsn, value, words):
     o = legit_minutes(rsn=base_rsn)

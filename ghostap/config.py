@@ -39,6 +39,7 @@ DEFAULT_CONFIG: dict = {
     "retention": {
         "raw_hours": 0.0,             # 0 = keep every frame; >0 = prune older raw frames
         "check_minutes": 10.0,        # how often pruning runs during a live session
+        "memory_minutes": 30.0,       # detector keeps this much recent history in RAM (0 = all)
     },
     "logging": {"file": "data/logs/ghostap.log", "level": "INFO"},
     # Attack signatures (F001-F003): a match raises the AP's score to at least this value.
@@ -177,6 +178,8 @@ def validate(cfg: dict) -> dict:
     r = cfg["retention"]
     need(r["raw_hours"] >= 0, "retention.raw_hours cannot be negative (0 keeps everything)")
     need(r["check_minutes"] > 0, "retention.check_minutes must be greater than 0")
+    need(r["memory_minutes"] == 0 or r["memory_minutes"] >= 2,
+         "retention.memory_minutes must be 0 (keep everything) or at least 2")
     need(str(cfg["logging"]["level"]).upper() in _LEVELS,
          "logging.level must be one of " + ", ".join(_LEVELS))
     n = cfg["notifications"]

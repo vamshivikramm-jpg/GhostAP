@@ -40,8 +40,8 @@ def test_mute_hides_alert_from_open_count_and_can_be_removed(client):
     assert [m["value"] for m in client.get("/api/mutes").get_json()] == [EVIL]
     after = client.get("/api/summary").get_json()
     assert after["muted_alerts"] >= 1 and (after["top_alert"] is None or after["top_alert"]["bssid"] != EVIL)
-    assert client.post("/api/mutes/{}/delete".format(mid)).status_code == 200
-    assert client.post("/api/mutes/{}/delete".format(mid)).status_code == 404
+    assert client.post("/api/mutes/{}/delete".format(mid), json={}).status_code == 200
+    assert client.post("/api/mutes/{}/delete".format(mid), json={}).status_code == 404
     assert client.get("/api/mutes").get_json() == []
 
 

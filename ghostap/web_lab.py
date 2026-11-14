@@ -15,7 +15,7 @@ from typing import Optional
 
 from flask import Response, abort, jsonify, request
 
-from .sessions import SessionError, export_bundle
+from .sessions import SessionError, export_bundle, recording_of
 
 LABELS = {
     "security_downgrade": "Security downgrade", "new_bssid_oui": "New radio / vendor",
@@ -45,11 +45,8 @@ def _session(ctx):
     return s, s.meta()
 
 
-def _source_pcap(s, meta) -> Optional[str]:
-    if os.path.isfile(s.pcap):
-        return s.pcap
-    src = meta.get("source")
-    return src if meta.get("mode") == "replay" and src and os.path.isfile(src) else None
+def _source_pcap(s, meta=None) -> Optional[str]:
+    return recording_of(s)
 
 
 def _t(ts, t0):

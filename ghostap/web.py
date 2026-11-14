@@ -133,7 +133,34 @@ def create_app(db: str, config: Optional[dict] = None,
         if local_only and not is_loopback(_request_hostname()):
             return Response("GhostAP only answers requests addressed to localhost.\n",
                             status=403, mimetype="text/plain")
-        return gate_box[0].check()            # API key, viewer link, account, token or local (web_auth)
+        blocked = cross_site_block()
+        if blocked is not None:
+            return blocked
+        return gate_box[0].check()
+
+    def cross_site_block():
+        """Refuse state-changing requests that another website could make (CSRF).
+
+        Without accounts on localhost every request is trusted, and a page on any site can
+        still send a form POST to 127.0.0.1. Browsers mark such requests: Sec-Fetch-Site is
+        "cross-site" / "same-site" and Origin names the other site. Every POST must also be
+        JSON, which a cross-site form cannot send without a CORS preflight (never approved).
+        Scripts (curl, sensors) send neither header and are unaffected."""
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return None
+        site = request.headers.get("Sec-Fetch-Site")
+        if site is not None and site not in ("same-origin", "none"):
+            return jsonify({"error": "cross-site request refused"}), 403
+        origin = request.headers.get("Origin")
+        if origin and origin != "null":
+            from urllib.parse import urlsplit
+            if urlsplit(origin).netloc.lower() != (request.host or "").lower():
+                return jsonify({"error": "cross-site request refused"}), 403
+        elif origin == "null":
+            return jsonify({"error": "cross-site request refused"}), 403
+        if not request.is_json:
+            return jsonify({"error": "send a JSON body (Content-Type: application/json), even {}"}), 415
+        return None            # API key, viewer link, account, token or local (web_auth)
 
     @app.after_request
     def security_headers(resp):

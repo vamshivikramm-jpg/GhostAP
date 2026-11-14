@@ -193,12 +193,8 @@ def _session_pcap(ctx):
     """The recording behind the viewed session: its capture.pcap, or the replayed file."""
     sid = ctx.viewed_session()
     if sid is not None:
-        p = ctx.sessions.get(sid).pcap if ctx.sessions else None
-        if p and os.path.isfile(p):
-            return p
-        meta = ctx.sessions.get(sid).meta() if ctx.sessions else {}
-        src = meta.get("source") if meta.get("mode") == "replay" else None
-        return src if src and os.path.isfile(src) else None
+        from .sessions import recording_of
+        return recording_of(ctx.sessions.get(sid)) if ctx.sessions else None
     pipe = ctx.pipeline
     for p in (getattr(pipe, "pcap", None), getattr(pipe, "save_pcap", None)):
         if p and os.path.isfile(p):

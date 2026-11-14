@@ -31,3 +31,26 @@ jobs:
           python evaluate.py --dataset data/eval --out results --no-charts
       - name: Numbers quoted in the docs match the results
         run: python tools/sync_numbers.py
+
+  docker:
+    # Builds the image from Dockerfile and checks that the dashboard answers inside it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t ghostap:ci .
+      - name: Start the demo container and wait for the dashboard
+        run: |
+          docker run -d --name ghostap-ci -p 127.0.0.1:8050:8050 -e GHOSTAP_TOKEN=ci-only-token \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true ghostap:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8050/api/login/state >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8050/api/login/state
+          docker exec ghostap-ci python -m ghostap.healthcheck 8050
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8050/api/summary)" = 401
+          curl -fsS -H "Authorization: Bearer ci-only-token" http://127.0.0.1:8050/api/summary
+      - name: Container logs
+        if: always()
+        run: docker logs ghostap-ci || true

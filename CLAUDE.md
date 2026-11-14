@@ -59,7 +59,7 @@ tools/                   make_test_pcap, make_eval_set (11 scenarios), build_sce
                          demo, sync_numbers, bench_large_site, screenshot_dashboard, kali_monitor.sh,
                          install_service.sh
 deploy/, Dockerfile, docker-compose.yml          systemd unit, container (not built here)
-tests/                   pytest (217 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
+tests/                   pytest (233 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
                          pip-audit, tests, evaluation smoke test, sync_numbers check)
 ```
 
@@ -102,6 +102,16 @@ python -m ghostap.apikeys create --name X --scope read
   through `esc()` in app.js, including Plotly legend names. The triage endpoint accepts
   JSON only (this blocks cross-site form posts). Keep both.
 - Static files are served with `max_age=0`. Keep it, or users see stale dashboards.
+- Every POST must be JSON (send `{}` when there is nothing to send) and same-origin:
+  `cross_site_block()` in web.py refuses `Sec-Fetch-Site: cross-site/same-site` and foreign
+  `Origin`s (local mode trusts localhost, so this is the CSRF defence). Keep it.
+- Database changes: add a `(version, function)` to `MIGRATIONS` in storage.py (never edit a
+  released one) plus a test; `PRAGMA user_version` tracks it; newer databases are refused.
+- Live detector memory is capped by `retention.memory_minutes` (prunes the Analyzer only;
+  `tests/test_memory_bound.py` checks scores are identical). Indicators may only look at the
+  scoring window, each AP's first `Analyzer.HEAD` frames and TSF resets.
+- Sensor hardware: one TP-Link Archer T2U Plus (RTL8821AU, 2.4/5 GHz, no 6 GHz); see
+  docs/HARDWARE.md. GhostAP 2.0 plan: Phase 0 done; next phases in the 2.0 proposal.
 - Web security (keep): Host-header check when bound to localhost (DNS rebinding); the Gate
   in web_auth.py (API keys, viewer links, accounts, start-up token; role rules in
   ADMIN_ONLY / allowed()); strict CSP (no inline scripts: all JS in static files);

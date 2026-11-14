@@ -35,7 +35,10 @@ curl -s -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
      http://kali.local:8050/api/alerts/12/triage        # needs a write key
 ```
 
-POST bodies must be JSON (`Content-Type: application/json`); anything else gets 415.
+POST bodies must be JSON (`Content-Type: application/json`), also for actions without
+parameters (send `{}`); anything else gets 415. Requests that a browser marks as coming from
+another site (`Sec-Fetch-Site: cross-site`, or an `Origin` that is not this dashboard) get 403.
+Scripts such as curl send neither header and are not affected.
 Add `?session=<id>` to a GET to read a past session (ids from `GET /api/sessions`).
 
 ## Useful endpoints

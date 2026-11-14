@@ -119,21 +119,28 @@ _CIPHERS = {1: "WEP40", 2: "TKIP", 4: "CCMP", 5: "WEP104", 8: "GCMP", 9: "GCMP-2
 _AKMS = {1: "802.1X", 2: "PSK", 3: "FT-802.1X", 4: "FT-PSK", 5: "802.1X-SHA256", 6: "PSK-SHA256",
          8: "SAE", 9: "FT-SAE", 11: "802.1X-B", 12: "802.1X-B192", 18: "OWE", 24: "SAE-EXT", 25: "FT-SAE-EXT"}
 CIPHER_RANK = {"WEP40": 0, "WEP104": 0, "TKIP": 1, "CCMP": 2, "GCMP": 2, "CCMP-256": 3, "GCMP-256": 3}
+_MGMT_CIPHERS = {6: "BIP-CMAC-128", 11: "BIP-GMAC-128", 12: "BIP-GMAC-256", 13: "BIP-CMAC-256"}
 
 
-def akm_class(akm: str) -> int:
-    """3 = enterprise (802.1X), 2 = WPA3 personal (SAE/OWE), 1 = password (PSK), 0 = unknown."""
+def akm_class(akm: str) -> float:
+    """3 = enterprise (802.1X), 2 = WPA3 personal (SAE), 1 = password (PSK),
+    0.5 = OWE (encrypted but without any password or login: anyone can run one under any
+    name, so it proves nothing about who runs the network), 0 = unknown."""
     if "802.1X" in akm:
         return 3
-    if akm.startswith(("SAE", "FT-SAE", "OWE")):
+    if akm.startswith(("SAE", "FT-SAE")):
         return 2
     if "PSK" in akm:
         return 1
+    if akm.startswith("OWE"):
+        return 0.5
     return 0
 
 
 def parse_rsn(body) -> Optional[str]:
-    """Compact RSN summary, e.g. 'pw=CCMP;akm=PSK,SAE;pmf=capable', or None without RSN."""
+    """Compact RSN summary, e.g. 'pw=CCMP;akm=PSK,SAE;pmf=capable;grp=CCMP;gmgmt=BIP-CMAC-128',
+    or None without RSN. grp = group (broadcast) cipher, gmgmt = group management cipher
+    (only present when the AP sends it, usually with PMF)."""
     elt = body.payload
     while isinstance(elt, Dot11Elt):
         if int(elt.ID) == 48:
@@ -143,6 +150,7 @@ def parse_rsn(body) -> Optional[str]:
     else:
         return None
     try:
+        grp = _CIPHERS.get(raw[5], "?{}".format(raw[5])) if len(raw) >= 6 else None
         i = 2 + 4                                   # version, group cipher
         n = int.from_bytes(raw[i:i + 2], "little")
         i += 2
@@ -154,18 +162,27 @@ def parse_rsn(body) -> Optional[str]:
         i += 4 * n
         caps = int.from_bytes(raw[i:i + 2], "little") if len(raw) >= i + 2 else 0
         pmf = "required" if caps & 0x40 else "capable" if caps & 0x80 else "none"
-        return "pw={};akm={};pmf={}".format(",".join(pw), ",".join(akm), pmf)
+        out = "pw={};akm={};pmf={}".format(",".join(pw), ",".join(akm), pmf)
+        if grp:
+            out += ";grp=" + grp
+        i += 2
+        if len(raw) >= i + 2:                       # PMKID list, then group management cipher
+            n = int.from_bytes(raw[i:i + 2], "little")
+            i += 2 + 16 * n
+            if len(raw) >= i + 4:
+                out += ";gmgmt=" + _MGMT_CIPHERS.get(raw[i + 3], "?{}".format(raw[i + 3]))
+        return out
     except (IndexError, ValueError):
         return None
 
 
 def rsn_fields(rsn: Optional[str]) -> dict:
     """'pw=CCMP;akm=PSK;pmf=none' -> {'pw': [...], 'akm': [...], 'pmf': 'none'}"""
-    out = {"pw": [], "akm": [], "pmf": None}
+    out = {"pw": [], "akm": [], "pmf": None, "grp": None, "gmgmt": None}
     for part in (rsn or "").split(";"):
         if "=" in part:
             k, v = part.split("=", 1)
-            out[k] = v if k == "pmf" else [x for x in v.split(",") if x]
+            out[k] = v if k in ("pmf", "grp", "gmgmt") else [x for x in v.split(",") if x]
     return out
 
 

@@ -13,8 +13,11 @@ from .auth import ABSOLUTE_S, COOKIE, ROLES, Auth, AuthError
 # What each role may do. Admin may do everything.
 ADMIN_ONLY = (re.compile(r"^/api/users"), re.compile(r"^/api/keys"), re.compile(r"^/api/sessions/[^/]+/delete$"),
               re.compile(r"^/api/demo/"), re.compile(r"^/api/settings(/reset)?$"),
-              re.compile(r"^/api/sensors/[^/]+/delete$"))
+              re.compile(r"^/api/sensors/[^/]+/delete$"), re.compile(r"^/api/settings/effective$"))
 VIEWER_POSTS = ("/api/logout",)
+# Read-only but sensitive: who did what (and from which address), where alerts are sent.
+NOT_FOR_VIEWERS = (re.compile(r"^/api/viewer_links"), re.compile(r"^/api/audit"), re.compile(r"^/api/notifications"),
+                   re.compile(r"^/api/alerts/\d+/history$"))
 PUBLIC = (re.compile(r"^/static/"), re.compile(r"^/vendor/"), re.compile(r"^/manifest\.webmanifest$"),
           re.compile(r"^/api/login(/state)?$"))
 
@@ -25,7 +28,7 @@ def allowed(role: str, method: str, path: str) -> bool:
     if any(p.match(path) for p in ADMIN_ONLY):
         return False
     if role == "viewer":
-        if path.startswith("/api/viewer_links"):
+        if any(p.match(path) for p in NOT_FOR_VIEWERS):
             return False
         return method in ("GET", "HEAD") or path in VIEWER_POSTS
     return role == "analyst"

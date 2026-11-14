@@ -89,8 +89,8 @@ def test_annotations_add_list_delete_and_audit(env):
     notes = c.get("/api/annotations").get_json()
     assert [(n["id"], n["text"], n["ts"]) for n in notes] == [(aid, "switched on the hotspot", t0 + 180)]
     assert c.get("/api/audit?action=annotation.add").get_json()[0]["target"] == str(aid)
-    assert c.post("/api/annotations/{}/delete".format(aid)).status_code == 200
-    assert c.post("/api/annotations/{}/delete".format(aid)).status_code == 404
+    assert c.post("/api/annotations/{}/delete".format(aid), json={}).status_code == 200
+    assert c.post("/api/annotations/{}/delete".format(aid), json={}).status_code == 404
     assert c.get("/api/annotations").get_json() == []
 
 

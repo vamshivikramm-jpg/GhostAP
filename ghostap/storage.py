@@ -199,6 +199,34 @@ GROUP BY ssid, bssid
 """
 
 
+class SchemaError(RuntimeError):
+    """The database cannot be used by this version of GhostAP."""
+
+
+def _columns(conn, table: str) -> set:
+    return {r[1] for r in conn.execute("PRAGMA table_info({})".format(table))}
+
+
+def _m1_columns_before_versioning(conn) -> None:
+    """Columns added before schema versions existed (GhostAP 1.0-1.1). Idempotent, so
+    databases of any earlier age are brought to the same state."""
+    for table, cols in (("observations", (("fingerprint", "TEXT"), ("rsn", "TEXT"), ("freq", "INTEGER"))),
+                        ("ap_profiles", (("rssi_n", "INTEGER"),)),
+                        ("alerts", (("triage_status", "TEXT DEFAULT 'new'"), ("triage_note", "TEXT"),
+                                    ("triage_ts", "REAL")))):
+        have = _columns(conn, table)
+        for col, decl in cols:
+            if col not in have:
+                conn.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, col, decl))
+
+
+# Ordered, never edited once released: add a new (version, function) for every change.
+MIGRATIONS = [
+    (1, _m1_columns_before_versioning),
+]
+SCHEMA_VERSION = MIGRATIONS[-1][0]
+
+
 class Store:
     BATCH_SIZE = 200
 
@@ -221,20 +249,24 @@ class Store:
         self._layouts_seen: set = set()
 
     def _migrate(self) -> None:
-        """Add columns introduced after a database was created (older GhostAP versions)."""
-        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(observations)")}
-        for col, decl in (("fingerprint", "TEXT"), ("rsn", "TEXT"), ("freq", "INTEGER")):
-            if col not in cols:
-                self.conn.execute("ALTER TABLE observations ADD COLUMN {} {}".format(col, decl))
-        pcols = {r[1] for r in self.conn.execute("PRAGMA table_info(ap_profiles)")}
-        if "rssi_n" not in pcols:
-            self.conn.execute("ALTER TABLE ap_profiles ADD COLUMN rssi_n INTEGER")
-        acols = {r[1] for r in self.conn.execute("PRAGMA table_info(alerts)")}
-        for col, decl in (("triage_status", "TEXT DEFAULT 'new'"), ("triage_note", "TEXT"),
-                          ("triage_ts", "REAL")):
-            if col not in acols:
-                self.conn.execute("ALTER TABLE alerts ADD COLUMN {} {}".format(col, decl))
+        """Bring a database up to SCHEMA_VERSION with the ordered MIGRATIONS below.
+
+        The version lives in SQLite's `PRAGMA user_version`. Tables are created by SCHEMA
+        (CREATE ... IF NOT EXISTS); migrations change what already exists. A database
+        written by a newer GhostAP is refused instead of being misread."""
+        have = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if have > SCHEMA_VERSION:
+            self.conn.close()
+            raise SchemaError("{} was written by a newer GhostAP (database schema {}, this version knows {}); "
+                              "upgrade GhostAP".format(self.path, have, SCHEMA_VERSION))
+        for version, step in MIGRATIONS:
+            if version > have:
+                step(self.conn)
+                self.conn.execute("PRAGMA user_version = {:d}".format(version))
         self.conn.commit()
+
+    def schema_version(self) -> int:
+        return self.conn.execute("PRAGMA user_version").fetchone()[0]
 
     def add(self, obs: dict) -> None:
         self.conn.execute(_INSERT, tuple(obs.get(f) for f in OBS_FIELDS))

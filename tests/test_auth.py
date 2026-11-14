@@ -92,7 +92,7 @@ def test_roles(env):
     assert viewer.get("/api/summary").status_code == 200
     assert viewer.post("/api/annotations", json={"ts": 1, "text": "x"}).status_code == 403
     assert viewer.get("/api/viewer_links").status_code == 403
-    assert viewer.post("/api/logout").status_code == 200
+    assert viewer.post("/api/logout", json={}).status_code == 200
     assert analyst.post("/api/viewer_links", json={"name": "examiner", "hours": 2}).status_code == 200
     assert analyst.get("/api/users").status_code == 403 and analyst.get("/api/keys").status_code == 403
     assert analyst.get("/api/settings").status_code == 403
@@ -120,7 +120,7 @@ def test_two_factor_flow_and_recovery_code(env):
     app, admin = env
     au, ids = _accounts(admin)
     c, _ = _login(app, "bob")
-    setup = c.post("/api/me/totp/setup").get_json()
+    setup = c.post("/api/me/totp/setup", json={}).get_json()
     assert setup["uri"].startswith("otpauth://totp/GhostAP:bob?secret=")
     assert c.post("/api/me/totp/enable", json={"code": "000000"}).status_code == 400
     codes = c.post("/api/me/totp/enable", json={"code": A.totp(setup["secret"], int(time.time() // 30))}).get_json()
@@ -147,7 +147,7 @@ def test_viewer_link_is_read_only_and_revocable(env):
     assert r.status_code == 303 and r.headers["Location"].endswith("/")
     assert guest.get("/api/me").get_json()["role"] == "viewer"
     assert guest.post("/api/alerts/triage_bulk", json={"ids": [1], "status": "confirmed"}).status_code == 403
-    assert boss.post("/api/viewer_links/{}/revoke".format(made["id"])).status_code == 200
+    assert boss.post("/api/viewer_links/{}/revoke".format(made["id"]), json={}).status_code == 200
     assert guest.get("/api/summary").status_code == 401
     assert app.test_client().get("/?view=" + token).status_code == 403
     assert boss.post("/api/viewer_links", json={"name": "x", "hours": 9999}).status_code == 400
@@ -160,7 +160,7 @@ def test_sessions_list_revoke_and_idle_timeout(env, monkeypatch):
     a2, _ = _login(app, "bob")
     rows = a1.get("/api/me/sessions").get_json()
     assert len(rows) == 2 and sum(r["current"] for r in rows) == 1
-    assert a1.post("/api/me/sessions/revoke_others").get_json()["revoked"] == 1
+    assert a1.post("/api/me/sessions/revoke_others", json={}).get_json()["revoked"] == 1
     assert a2.get("/api/summary").status_code == 401 and a1.get("/api/summary").status_code == 200
     assert a1.post("/api/me/password", json={"current": "nope", "new": PW + "!"}).status_code == 401
     assert a1.post("/api/me/password", json={"current": PW, "new": PW + "!"}).status_code == 200

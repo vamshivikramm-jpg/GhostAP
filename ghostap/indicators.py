@@ -189,7 +189,7 @@ class Baseline:
                 strength = rsn_strength(ap.rsn)
                 if strength:
                     b.rsn_best = strength if b.rsn_best is None else {
-                        k: max(b.rsn_best[k], strength[k]) for k in strength}
+                        k: max(b.rsn_best.get(k, strength[k]), strength[k]) for k in strength}
                 skew = clock_skew_ppm(obs)
                 if skew is not None:
                     b.bssid_skew[bssid] = skew
@@ -234,7 +234,8 @@ _PMF_RANK = {"none": 0, "capable": 1, "required": 2}
 
 
 def rsn_strength(rsn_strings: Iterable[str]) -> Optional[dict]:
-    """Weakest option an AP offers, as ranks: pmf (0-2), cipher (0-3), akm class (0-3)."""
+    """Weakest option an AP offers, as ranks: pmf (0-2), cipher (0-3, pairwise), group
+    (0-3, broadcast cipher; same as cipher when not sent), akm class (0-3, OWE 0.5)."""
     out = None
     for r in rsn_strings or ():
         f = rsn_fields(r)
@@ -242,6 +243,8 @@ def rsn_strength(rsn_strings: Iterable[str]) -> Optional[dict]:
             continue
         s = {"pmf": _PMF_RANK.get(f["pmf"] or "none", 0),
              "cipher": min((CIPHER_RANK.get(c, 0) for c in f["pw"]), default=0),
+             "group": CIPHER_RANK.get(f["grp"], 0) if f["grp"] else min(
+                 (CIPHER_RANK.get(c, 0) for c in f["pw"]), default=0),
              "akm": min((akm_class(a) for a in f["akm"]), default=0)}
         out = s if out is None else {k: min(out[k], s[k]) for k in s}
     return out
@@ -281,8 +284,14 @@ def _detail_downgrade(ap: APStats, base: SSIDBaseline):
         found.append((1.0, "offers a shared-password login while the network uses enterprise (802.1X) logins"))
     elif b["akm"] == 2 and s["akm"] == 1:
         found.append((0.8, "also offers WPA2 password login (WPA3 transition) while the network used WPA3 only"))
+    elif b["akm"] >= 1 and s["akm"] == 0.5:
+        found.append((0.9, "uses OWE (encrypted, but no password or login, so anyone can run it) while the "
+                           "network required a password or login"))
     if s["cipher"] <= 1 < b["cipher"]:
         found.append((1.0, "allows the broken TKIP/WEP cipher, which the network does not use"))
+    elif s.get("group", s["cipher"]) <= 1 < b.get("group", b["cipher"]):
+        found.append((0.8, "uses the broken TKIP/WEP cipher for broadcast traffic (group cipher), "
+                           "which the network does not"))
     if b["pmf"] == 2 and s["pmf"] < 2:
         found.append((0.8 if s["pmf"] == 0 else 0.4,
                       "does not require protected management frames, which the network requires"))
@@ -622,6 +631,8 @@ class Analyzer:
         self._bssid_ssids: Dict[str, Dict[str, float]] = defaultdict(dict)
         self.baseline = Baseline([], self.baseline_minutes, self.allowlist, self.monitored)
         self._baseline_frozen = False
+        self._pruned = False
+        self._pruned_before: Optional[float] = None
 
     @classmethod
     def from_db(cls, db_path: str, baseline_minutes: float = DEFAULT_BASELINE_MINUTES,
@@ -635,10 +646,18 @@ class Analyzer:
         if not new:
             return
         if self.obs and new[0]["ts"] < self.obs[-1]["ts"]:
-            # rare: a frame older than what we have. Rebuild in time order.
-            merged = sorted(self.obs + new, key=lambda o: o["ts"])
-            self._reset_state()
-            new = merged
+            if self._pruned:
+                # after pruning a rebuild would relearn from partial history: insert the late
+                # frames in place instead (any frame older than the pruned span is dropped)
+                self._insert_late([o for o in new if o["ts"] < self.obs[-1]["ts"]])
+                new = [o for o in new if o["ts"] >= self.obs[-1]["ts"]]
+                if not new:
+                    return
+            else:
+                # rare: a frame older than what we have. Rebuild in time order.
+                merged = sorted(self.obs + new, key=lambda o: o["ts"])
+                self._reset_state()
+                new = merged
         for o in new:
             if o["ssid"] == HIDDEN_SSID:
                 names = self._bssid_ssids.get(o["bssid"])
@@ -664,6 +683,19 @@ class Analyzer:
             self.baseline = Baseline(self.obs, self.baseline_minutes, self.allowlist, self.monitored)
             # all frames of the baseline window are in once we are past its end
             self._baseline_frozen = self.obs[-1]["ts"] >= self.baseline.end
+
+    def _insert_late(self, late: List[dict]) -> None:
+        """Late frames after pruning: insert by time into the per-AP lists (no rebuild)."""
+        for o in late:
+            if self._pruned_before is not None and o["ts"] < self._pruned_before:
+                continue                                    # older than what memory keeps
+            key = (o["ssid"], o["bssid"])
+            if key not in self._ts:
+                continue                                    # unknown AP this late: skip it
+            i = bisect.bisect_right(self._ts[key], o["ts"])
+            self._ts[key].insert(i, o["ts"])
+            self._by_ap[key].insert(i, o)
+            self.obs.insert(bisect.bisect_right([x["ts"] for x in self.obs], o["ts"]), o)
 
     def _decloak(self, bssid: str, ssid: str) -> None:
         """F010: frames from a hidden radio heard before its name was known move to that name."""
@@ -707,6 +739,8 @@ class Analyzer:
         if removed:
             heads = {id(o) for obs in self._by_ap.values() for o in obs}
             self.obs = [o for o in self.obs if id(o) in heads]
+            self._pruned = True
+            self._pruned_before = max(self._pruned_before or before_ts, before_ts)
         return removed
 
     def aps(self) -> List[Tuple[str, str]]:

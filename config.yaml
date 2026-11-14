@@ -92,3 +92,9 @@ ai:
   effort: medium
   max_tokens: 16000
   redact: true
+
+# Storage limits for long live captures.
+retention:
+  raw_hours: 0          # delete raw frames from the database after this many hours (0 = keep all)
+  check_minutes: 10     # how often the limits are applied
+  memory_minutes: 30    # recent history the detector keeps in RAM (0 = all); scores are unaffected

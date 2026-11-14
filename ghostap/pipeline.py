@@ -62,7 +62,9 @@ class IncrementalScorer:
         self.last_id = 0
         self.last_event_id = 0
         self._last_prune_ts: Optional[float] = None
+        self._last_mem_prune: Optional[float] = None
         self.pruned = 0
+        self.forgotten = 0         # frames dropped from memory only (still in the database)
 
     def step(self, final: bool = False) -> dict:
         with Store(self.db) as store:
@@ -90,8 +92,20 @@ class IncrementalScorer:
                 "alerts": len(report.alerts)}
 
     def _retention(self, store: Store) -> None:
-        """F070: drop raw frames older than retention.raw_hours (capture time)."""
+        """F070: drop raw frames older than retention.raw_hours (capture time), and keep the
+        detector's in-memory history to retention.memory_minutes (the database keeps all).
+
+        Indicators only look at the last scoring window, each AP's first frames and its TSF
+        resets, which pruning keeps, so scores do not change; memory stays flat in long
+        live captures instead of growing ~1 KB per beacon."""
         r = self.config.get("retention", {})
+        mem_min = float(r.get("memory_minutes") or 0)
+        if mem_min > 0 and self.analyzer.obs:
+            now = self.analyzer.obs[-1]["ts"]
+            every = min(float(r.get("check_minutes", 10)) * 60, mem_min * 30)
+            if self._last_mem_prune is None or now - self._last_mem_prune >= every:
+                self._last_mem_prune = now
+                self.forgotten += self.analyzer.prune(now - mem_min * 60)
         keep_h = float(r.get("raw_hours") or 0)
         if keep_h <= 0 or not self.analyzer.obs:
             return

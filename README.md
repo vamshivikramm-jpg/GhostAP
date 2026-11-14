@@ -37,6 +37,7 @@ captures to confirm (`done*`). Highlights:
 | Saved baselines | Monitored networks page, baseline wizard, accept a change, new-network inbox, allow-list, network health | Monitored page |
 | Dashboard | incident story, filters and bulk triage, mutes, history, beacon diff, vendors, signal/uptime charts, evidence pcap, related APs, what-if weights, notes, clock time, CSV export, layout, tour, glossary, command palette (Ctrl/⌘K), colour-blind and high-contrast modes, Hindi/Telugu drafts, shareable links, demo + presentation mode | [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md), [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
 | Sessions and lab | sessions, labelling page with suggestions, evaluation page (confidence intervals, ROC/PR, tune/test split, learned weights, anomaly model, Kismet), scenario builder, session report and bundles, number sync | `python evaluate.py --extended` |
+| Hardware | the planned sensor adapter, a checklist to verify monitor mode, what is actually tested | [docs/HARDWARE.md](docs/HARDWARE.md) |
 | Operations | notifications (webhooks, ntfy, Telegram, Slack, e-mail, syslog/CEF), Prometheus metrics, API keys, accounts with roles and two-factor sign-in, viewer links, HTTPS, systemd service, Docker, settings page, several sensors with rough location, capture control | [docs/API.md](docs/API.md), [docs/DEPLOY.md](docs/DEPLOY.md) |
 | Opt-in AI | alert explainer and “Ask GhostAP” through the Claude API, off by default, names hidden from the model | `ai:` in `config.yaml` |
 

@@ -25,6 +25,34 @@ class SessionError(ValueError):
     pass
 
 
+_PCAP_MAGIC = (b"\xa1\xb2\xc3\xd4", b"\xd4\xc3\xb2\xa1", b"\xa1\xb2\x3c\x4d", b"\x4d\x3c\xb2\xa1",
+               b"\x0a\x0d\x0d\x0a")                     # pcap (us / ns, both byte orders), pcapng
+
+
+def is_pcap(path: str) -> bool:
+    """True for an existing pcap / pcapng file (checked by its first bytes, not its name)."""
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) in _PCAP_MAGIC
+    except OSError:
+        return False
+
+
+def recording_of(session: "Session") -> "str | None":
+    """The pcap behind a session: its own capture.pcap, else the file a replay read.
+
+    The replayed path comes from meta.json, which GhostAP writes itself. Imported bundles
+    have their source removed (import_bundle), and the file must really be a pcap, so a
+    session can never be made to point evidence or label exports at another file."""
+    if is_pcap(session.pcap):
+        return session.pcap
+    m = session.meta()
+    src = m.get("source")
+    if m.get("mode") == "replay" and not m.get("imported_from") and src and is_pcap(src):
+        return src
+    return None
+
+
 def _slug(text: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
     return (s or "session")[:40].strip("-") or "session"
@@ -215,8 +243,10 @@ def import_bundle(store: "SessionStore", path: str) -> Session:
             meta = json.loads(z.read("meta.json")) if "meta.json" in names else {}
         except ValueError:
             meta = {}
+        # the source path is NOT kept: it named a file on the machine that made the bundle, and
+        # trusting it would let a crafted bundle point exports at any file here
         s = store.create("{} (imported)".format(str(meta.get("name") or manifest.get("session") or "bundle")[:100]),
-                         meta.get("mode", "imported"), meta.get("source", ""))
+                         "imported", "")
         try:
             for name in BUNDLE_FILES:
                 if name not in names or name == "meta.json":

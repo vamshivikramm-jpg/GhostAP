@@ -74,6 +74,7 @@ def register(app, ctx) -> None:
             recent = s.conn.execute("SELECT COUNT(*) FROM observations WHERE ts > ?",
                                     ((last or 0) - 60,)).fetchone()[0] if last else 0
             n_obs = s.conn.execute("SELECT COUNT(*) FROM observations").fetchone()[0]
+            schema = s.schema_version()
         disk = shutil.disk_usage(os.path.dirname(os.path.abspath(db)))
         sessions_bytes = sum(m.get("size_bytes", 0) for m in ctx.sessions.list()) if ctx.sessions else None
         ret = ctx.cfg.get("retention", {})
@@ -83,7 +84,7 @@ def register(app, ctx) -> None:
             "platform": platform.platform(terse=True),
             "server_uptime_s": round(time.time() - ctx.started, 1),
             "status": st,
-            "database": {"path": db, "bytes": _size(db), "raw_frames": n_obs},
+            "database": {"path": db, "bytes": _size(db), "raw_frames": n_obs, "schema_version": schema},
             "frames_last_minute": recent,
             "last_frame_age_s": (round(time.time() - st["last_frame_ts"], 1)
                                  if st.get("last_frame_ts") and st.get("mode") == "live" else None),

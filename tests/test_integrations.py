@@ -209,14 +209,14 @@ def test_metrics_api_keys_and_openapi(tmp_path):
     assert c.get("/api/summary", headers=hdr("gk_wrong")).status_code == 401
     listed = c.get("/api/keys").get_json()
     assert all("hash" not in k for k in listed) and listed[0]["prefix"] == rkey[:10]
-    assert c.post("/api/keys/{}/revoke".format(made["id"])).status_code == 200
+    assert c.post("/api/keys/{}/revoke".format(made["id"]), json={}).status_code == 200
     assert c.get("/api/summary", headers=hdr(rkey)).status_code == 401
     with Store(admin) as s:                                                            # only the hash is stored
         assert rkey not in json.dumps([dict(r) for r in s.conn.execute("SELECT * FROM api_keys")])
     spec = c.get("/api/openapi.json").get_json()
     assert spec["openapi"].startswith("3.") and "/api/alerts/{alert_id}/triage" in spec["paths"]
     assert "post" in spec["paths"]["/api/whatif"] and "/metrics" in spec["paths"]
-    assert c.post("/api/notifications/test").status_code == 400                       # nothing configured
+    assert c.post("/api/notifications/test", json={}).status_code == 400                       # nothing configured
 
 
 def test_apikey_cli(tmp_path, monkeypatch, capsys):

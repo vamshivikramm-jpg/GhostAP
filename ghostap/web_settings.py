@@ -59,6 +59,8 @@ SECTIONS = [
         _f("retention.raw_hours", "Keep raw frames (hours, 0 = all)", "number",
            "older frames are deleted during live capture", 0, 24 * 365, 1),
         _f("retention.check_minutes", "Check every (minutes)", "number", "", 1, 1440, 1),
+        _f("retention.memory_minutes", "Detector memory (minutes, 0 = all)", "number",
+           "recent history the detector keeps in RAM; the database keeps every frame", 0, 1440, 5),
         _f("logging.level", "Log level", "select", "data/logs/ghostap.log",
            choices=["DEBUG", "INFO", "WARNING", "ERROR"]),
     ]),
