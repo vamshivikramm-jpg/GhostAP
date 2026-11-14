@@ -67,13 +67,18 @@
   // ------------------------------------------------------------------ F013/F055-F061 integrations
   // Rendered separately from the 5-second refresh so forms and a new key stay on screen.
   async function loadIntegrations() {
-    let n, keys;
-    try { [n, keys] = await Promise.all([get("/api/notifications"), get("/api/keys")]); } catch (e) {
+    let n, keys, cap;
+    try { [n, keys, cap] = await Promise.all([get("/api/notifications"), get("/api/keys"), get("/api/capture")]); } catch (e) {
       integ.innerHTML = `<div class="card empty">Could not load integrations (${esc(e.message)}).</div>`;
       return;
     }
     const when = (t) => (t ? new Date(t * 1000).toLocaleString() : "–");
-    integ.innerHTML = `<section class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+    integ.innerHTML = (cap.live ? `<section class="card"><div class="card-head"><h2>Capture control <span class="muted">${esc(cap.iface || "")}</span></h2>
+        <button class="btn small ${cap.paused ? "primary" : ""}" data-cap="${cap.paused ? "resume" : "pause"}">${cap.paused ? "Resume" : "Pause"}</button></div>
+        <p>${cap.paused ? `<b>Paused</b> since ${new Date(cap.paused_since * 1000).toLocaleTimeString()} (${cap.dropped_while_paused} frames ignored). Nothing is scored while paused; the timeline shows the gap.` : "Capturing."} ${esc(cap.hopping || "")}</p>
+        <form class="key-form" data-hop-form><label class="sr-only" for="hop-ch">Channels</label><input class="input" id="hop-ch" placeholder="1,6,11 · 1-13 · 2.4 · 5 · all · or one channel to park" value="${esc((cap.channels || []).join(","))}">
+        <label class="sr-only" for="hop-dw">Seconds per channel</label><input class="input" id="hop-dw" type="number" min="0.05" max="10" step="0.05" value="${cap.dwell || 0.25}">
+        <button class="btn" type="submit">Apply</button></form></section>` : "") + `<section class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
       <div class="card"><div class="card-head"><h2>Notifications <span class="muted">${n.enabled ? (n.running ? "on" : "on, no channel running") : "off"}</span></h2>
           ${n.channels.length ? '<button class="btn small" data-notify-test>Send a test message</button>' : ""}</div>
         ${n.enabled ? "" : '<p class="hint">Switched off. Set <span class="mono">notifications.enabled: true</span> and add a webhook, ntfy topic, e-mail or syslog target in config.yaml (examples there). Secrets go in environment variables.</p>'}
@@ -109,6 +114,13 @@
       loadIntegrations();
       return;
     }
+    const cb = e.target.closest("[data-cap]");
+    if (cb) {
+      const r = await G.post("/api/capture", { action: cb.dataset.cap });
+      G.notice(r.ok ? (r.data.paused ? "Capture paused." : "Capture resumed.") : (r.data && r.data.error) || "Failed", r.ok ? "ok" : "error");
+      loadIntegrations();
+      return;
+    }
     if (e.target.closest("[data-desktop-notify]")) { await G.toggleDesktopNotify(); loadIntegrations(); return; }
     const rv = e.target.closest("[data-key-revoke]");
     if (rv) {
@@ -120,6 +132,13 @@
     }
   });
   document.addEventListener("submit", async (e) => {
+    if (e.target.matches("[data-hop-form]")) {
+      e.preventDefault();
+      const r = await G.post("/api/capture", { action: "hop", channels: integ.querySelector("#hop-ch").value, dwell: Number(integ.querySelector("#hop-dw").value) });
+      G.notice(r.ok ? r.data.hopping : (r.data && r.data.error) || "Failed", r.ok ? "ok" : "error");
+      loadIntegrations();
+      return;
+    }
     if (!e.target.matches("[data-key-form]")) return;
     e.preventDefault();
     const name = integ.querySelector("#key-name").value, scope = integ.querySelector("#key-scope").value;

@@ -120,6 +120,8 @@ class Pipeline:
         on_finish(status): called once ingest and the final scoring round are done."""
         self.monitored = monitored
         self.network_settings = network_settings
+        from .capture import CaptureControl
+        self.control = CaptureControl()        # F041
         self.hop_focus = hop_focus
         self.on_finish = on_finish
         if pcap and iface:
@@ -283,7 +285,7 @@ class Pipeline:
             n = collect_live(self.iface, self.duration, store, hop=self.hop, dwell=self.dwell,
                              save_pcap=self.save_pcap, stop=self._stop, on_frame=on_frame,
                              on_status=lambda m: self._set(hopping=m, rejected=self._damaged()),
-                             stats=self._rejected, focus=self.hop_focus)
+                             stats=self._rejected, focus=self.hop_focus, control=self.control)
             msg = "live capture finished ({} frames)".format(n)
             if self.save_pcap:
                 msg += "; saved to {}".format(self.save_pcap)

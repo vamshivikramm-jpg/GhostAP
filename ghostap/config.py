@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 import difflib
 import os
+import re
 from typing import Any, List, Optional
 
 SETTINGS_OVERLAY = os.path.join("data", "settings.yaml")
@@ -72,6 +73,10 @@ DEFAULT_CONFIG: dict = {
         "jsonl": {"enabled": False, "path": "data/alerts.jsonl"},                                            # F059
     },
     "api": {"metrics": True},              # F060: Prometheus /metrics endpoint
+    # F044/F045: several sensors. On a sensor set name + report_to; the key comes from the
+    # environment variable named here (a write API key made on the central GhostAP).
+    "sensors": {"name": "", "report_to": "", "report_key_env": "GHOSTAP_REPORT_KEY", "report_ca": "",
+                "every_seconds": 10.0, "path_loss_p0": -40.0, "path_loss_n": 3.0},
     # F086/F087: opt-in AI help through the Claude API (key in ANTHROPIC_API_KEY, never here)
     "ai": {"enabled": False, "model": "claude-opus-5-5", "effort": "medium", "max_tokens": 16000,
            "redact": True},
@@ -204,6 +209,14 @@ def validate(cfg: dict) -> dict:
     need(sl["format"] in ("json", "cef"), "notifications.syslog.format must be json or cef")
     need(1 <= sl["port"] <= 65535, "notifications.syslog.port must be 1-65535")
     need(not n["jsonl"]["enabled"] or bool(n["jsonl"]["path"]), "notifications.jsonl.path is empty")
+    sn = cfg["sensors"]
+    need(not sn["report_to"] or str(sn["report_to"]).startswith(("http://", "https://")),
+         "sensors.report_to must start with http:// or https://")
+    need(not sn["report_to"] or bool(re.match(r"^[A-Za-z0-9_.-]{1,40}$", str(sn["name"]))),
+         "sensors.name (1-40 letters, digits, . _ -) is needed with report_to")
+    need(2 <= sn["every_seconds"] <= 3600, "sensors.every_seconds must be 2 to 3600")
+    need(-100 <= sn["path_loss_p0"] <= 0 and 1.5 <= sn["path_loss_n"] <= 6,
+         "sensors.path_loss_p0 must be -100..0 dBm and path_loss_n 1.5..6")
     ai = cfg["ai"]
     need(ai["effort"] in ("low", "medium", "high", "xhigh", "max"), "ai.effort must be low, medium, high, xhigh or max")
     need(1024 <= ai["max_tokens"] <= 64000, "ai.max_tokens must be between 1024 and 64000")

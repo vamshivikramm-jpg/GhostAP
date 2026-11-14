@@ -91,11 +91,11 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F038 | Large-site performance | D | done |
 | F039 | Table export and columns | D | done |
 | F040 | Sessions page | A | done |
-| F041 | Capture control panel | J | todo |
+| F041 | Capture control panel | J | done* (pause and hop changes tested with simulated frames; needs a monitor-mode adapter to confirm) |
 | F042 | Capture quality panel | B | done |
 | F043 | Smart channel hopping | B | done |
-| F044 | Several sensors | J | todo |
-| F045 | Rough location | J | todo |
+| F044 | Several sensors | J | done* (tested between two GhostAP instances on one machine; real multi-laptop setup on Kali) |
+| F045 | Rough location | J | done* (geometry verified with model-generated signals; real accuracy unknown until measured) |
 | F046 | Labelling page | G | done |
 | F047 | Evaluation page | G | done |
 | F048 | Confidence intervals and test splits | G | done |

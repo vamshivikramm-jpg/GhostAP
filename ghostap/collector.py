@@ -70,7 +70,7 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
                  save_pcap: Optional[str] = None, stop: Optional[threading.Event] = None,
                  on_frame: Optional[Callable[[dict], None]] = None,
                  on_status: Optional[Callable[[str], None]] = None,
-                 stats: Optional[dict] = None, focus: Optional[dict] = None) -> int:
+                 stats: Optional[dict] = None, focus: Optional[dict] = None, control=None) -> int:
     """Sniff beacons / probe responses until `duration` seconds pass or `stop` is set.
 
     hop:       channel list to cycle through (None = stay on the current channel)
@@ -91,6 +91,8 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
         writer = PcapWriter(save_pcap, linktype=127, sync=True)  # 127 = RadioTap
 
     def handle(pkt):
+        if control is not None and control.drop():      # F041: paused from the dashboard
+            return
         obs = parse_frame(pkt, stats)
         if obs:
             store.add(obs)
@@ -107,6 +109,8 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
                 writer.write(pkt)
 
     hopper = ChannelHopper(iface, hop, dwell, focus=focus).start() if hop else None
+    if control is not None:
+        control.iface, control.hopper = iface, hopper
     start = time.time()
     try:
         while not (stop is not None and stop.is_set()):
@@ -116,9 +120,14 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
             sniff(iface=iface, prn=handle, lfilter=_is_beacon_or_probe_resp,
                   store=False, timeout=chunk)
             store.commit()
+            if control is not None:
+                hopper = control.hopper                  # may have been started from the dashboard
             if hopper is not None and on_status:
                 on_status(hopper.describe())
     finally:
+        if control is not None:
+            hopper = control.hopper
+            control.iface = None
         if hopper is not None:
             hopper.stop()
         if writer is not None:

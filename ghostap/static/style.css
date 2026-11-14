@@ -628,3 +628,13 @@ body.role-viewer [data-trust], body.role-viewer .checklist input { display: none
 .ask-log { display: grid; gap: 8px; }
 .ask-log .q { font-weight: 500; }
 .ask-log .a { padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 6px; }
+
+/* F044/F045 sensors */
+.sensor-map { width: 100%; max-width: 680px; height: auto; background: var(--surface-2); border-radius: 10px; }
+.sensor-map text { font-size: 11px; fill: var(--text-2); }
+.sensor-map .sensor { fill: var(--accent); }
+.sensor-map .sensor.off { fill: var(--muted); }
+.sensor-map .est { fill: none; stroke-width: 1.5; stroke-dasharray: 4 3; stroke: var(--muted); }
+.sensor-map .est.HIGH { stroke: var(--critical); } .sensor-map .est.MEDIUM { stroke: var(--serious); }
+.sensor-map .dot { fill: var(--muted); } .sensor-map .dot.HIGH { fill: var(--critical); } .sensor-map .dot.MEDIUM { fill: var(--serious); }
+.input.pos { width: 64px; }

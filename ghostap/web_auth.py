@@ -12,7 +12,8 @@ from .auth import ABSOLUTE_S, COOKIE, ROLES, Auth, AuthError
 
 # What each role may do. Admin may do everything.
 ADMIN_ONLY = (re.compile(r"^/api/users"), re.compile(r"^/api/keys"), re.compile(r"^/api/sessions/[^/]+/delete$"),
-              re.compile(r"^/api/demo/"), re.compile(r"^/api/settings(/reset)?$"))
+              re.compile(r"^/api/demo/"), re.compile(r"^/api/settings(/reset)?$"),
+              re.compile(r"^/api/sensors/[^/]+/delete$"))
 VIEWER_POSTS = ("/api/logout",)
 PUBLIC = (re.compile(r"^/static/"), re.compile(r"^/vendor/"), re.compile(r"^/manifest\.webmanifest$"),
           re.compile(r"^/api/login(/state)?$"))

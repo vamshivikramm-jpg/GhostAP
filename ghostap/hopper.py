@@ -89,6 +89,16 @@ class ChannelHopper:
         self._thread.start()
         return self
 
+    def reconfigure(self, channels: List[int], dwell: Optional[float] = None) -> None:
+        """F041: new channel list / dwell while running (restarts hopping if it had given up)."""
+        self.channels = list(channels)
+        self.dropped, self.error = [], None
+        self.focus = {k: v for k, v in self.focus.items() if k in self.channels}
+        if dwell:
+            self.dwell = dwell
+        if (self._thread is None or not self._thread.is_alive()) and not self._stop.is_set():
+            self.start()
+
     def stop(self) -> None:
         self._stop.set()
         if self._thread:

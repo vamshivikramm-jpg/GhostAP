@@ -471,6 +471,8 @@ def create_app(db: str, config: Optional[dict] = None,
     ctx.summary_dict = lambda: app.view_functions["summary"]().get_json()
     from . import web_ai
     web_ai.register(app, ctx)
+    from . import web_sensors
+    web_sensors.register(app, ctx)
 
     @app.get("/api/timeline")
     def timeline():
