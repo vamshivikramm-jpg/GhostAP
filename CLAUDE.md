@@ -27,11 +27,14 @@ dashboard. The README has user-facing docs; this file is the working context.
 | 7 report + demo | drafted: `docs/REPORT.md`, `docs/REPORT.docx`, `docs/DEMO.md` |
 | Feature expansion F001–F091 (phases A–J) | built; per-feature status in `docs/ROADMAP.md` (`done*` = needs hardware, credentials or Phase 2 data to confirm) |
 | GhostAP 2.0 (`docs/PLAN_2.0.md`) | Phase 0 done; dashboard simplified; Live radar page; next: Phase 1 real captures, then Phase 2 Integrity |
+| GhostAP 3.0 (`docs/PLAN_3.0.md`) | plan approved 14 Nov 2026 (Airspace Assurance; passive by default, policy-gated active). Order: 2.1 live-found fixes, 5 GHz run, soak → 2.2 → 3.0 (radio broker, identity card, declared topology, sensor integrity, hwsim lab, inventory) → 3.1 active → 3.2 remediation → 4.x |
 
 User decisions for 2.0 (keep): **one sensor only** (TP-Link Archer T2U Plus, RTL8821AU, 2.4/5 GHz,
 no 6 GHz: no multi-sensor lab tests or 6 GHz validation on own hardware); **PDF report last**, not now;
 **no deadline**; the public **AWID3** dataset may be used for the ML phase. Not answered yet: team size
 (two-person baseline approval?) and CI status. Commit locally, then ask before pushing.
+3.0 decisions: no over-the-air containment ever (not a WIPS); active actions only through a policy-gated
+broker, on owned/authorized targets; approval admin-only by default, two-person when ≥ 2 admins.
 
 Open items in the report (marked `_[…]_`, yellow in the .docx): team names / guide /
 college, **Section 7.4 real-capture results**, and academic references (do not invent
