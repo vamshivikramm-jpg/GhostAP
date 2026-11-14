@@ -616,13 +616,15 @@
         <div>
           <h2 class="d-title">${esc(ssidLabel(ap.ssid))} <span class="mono muted">${esc(ap.bssid)}</span></h2>
           <div class="d-tags">${tags}
-            <span class="row-actions" style="margin-left:auto">
-              ${ap.ssid !== "<hidden>" ? `<button class="btn small" data-accept-baseline title="It is ours: add it to ${esc(ap.ssid)}'s saved baseline so it stops alerting">Accept into baseline</button>` : ""}
-              ${ap.allowlisted ? "" : '<button class="btn small" data-trust title="Add to the allow-list: not treated as new, but cloning it is still detected">Trust this AP</button>'}
-              <select class="input small-select" data-mute aria-label="Mute this access point"><option value="">Mute…</option><option value="1">for 1 hour</option><option value="8">for 8 hours</option><option value="24">for 24 hours</option><option value="168">for a week</option></select>
-              <button class="btn small" data-export title="Download a Markdown write-up of this access point (for your report or notes)">Export report</button>
-              <button class="btn small" data-copy-link title="Copy a link that opens this access point with the current tab, filters and time range">Copy link</button>
-              <a class="btn small" data-evidence href="${esc(withSession(`/api/ap/evidence.pcap?ssid=${encodeURIComponent(ap.ssid)}&bssid=${encodeURIComponent(ap.bssid)}`))}" download title="Download this access point's beacons around the alert as a pcap (open in Wireshark)">Evidence pcap</a></span></div>
+            <details class="menu actions-menu" style="margin-left:auto"><summary class="btn small">Actions ▾</summary>
+              <div class="menu-body menu-list row-actions">
+              ${ap.ssid !== "<hidden>" ? `<button data-accept-baseline>It's ours: accept it<small>Adds it to ${esc(ap.ssid)}'s saved baseline, so it stops alerting</small></button>` : ""}
+              ${ap.allowlisted ? "" : "<button data-trust>Trust this address<small>Not treated as new any more; a copy of it is still detected</small></button>"}
+              <label class="menu-select">Mute alerts <select class="input small-select" data-mute aria-label="Mute this access point"><option value="">…</option><option value="1">for 1 hour</option><option value="8">for 8 hours</option><option value="24">for 24 hours</option><option value="168">for a week</option></select></label>
+              <button data-export>Download a write-up<small>Markdown summary for your notes or report</small></button>
+              <button data-copy-link>Copy a link to this view<small>Opens this access point with the same filters</small></button>
+              <a data-evidence href="${esc(withSession(`/api/ap/evidence.pcap?ssid=${encodeURIComponent(ap.ssid)}&bssid=${encodeURIComponent(ap.bssid)}`))}" download>Download evidence (pcap)<small>This access point's beacons around the alert, for Wireshark</small></a>
+              </div></details></div>
           <div class="why ${esc(level || "")}"><b>${esc(whatIs)}</b>
             ${hits.length ? `<span class="muted">${alert ? "At its peak (" + rel(alert.peak_ts) + ") the main reasons were:" : "What raised the score:"}</span><ul>${whyList}</ul>`
               : `<span class="muted">${inds.length ? "None of the eight checks found anything unusual about this access point." : "Scoring starts after the learning period."}</span>`}
@@ -645,6 +647,7 @@
         </div>
       </div>
 
+      <details class="tech" id="tech-details" ${state.techOpen ? "open" : ""}><summary>Technical details <span class="muted">signal and uptime charts, beacon structure, related access points</span></summary>
       <div class="two">
         <div>
           <div class="section-title"><h3>Signal and uptime</h3><span class="muted">compared with the network's other access points</span></div>
@@ -656,7 +659,8 @@
           <div id="beacon-diff" class="bdiff"><p class="muted">Loading…</p></div>
         </div>
       </div>
-      <div id="related" class="related" hidden></div>`;
+      <div id="related" class="related" hidden></div>
+      </details>`;
 
     if (alert) {
       const ruled = new Set(JSON.parse(store.get("ghostap-ruleout-" + alert.id) || "[]"));
@@ -1127,6 +1131,46 @@
     renderTimeline();
   });
 
+  // Advanced view: off by default, so the everyday screen shows only what most people need.
+  function applyAdvanced() {
+    const on = store.get("ghostap-advanced") === "1";
+    document.body.classList.toggle("simple", !on);
+    $("advanced-btn").setAttribute("aria-pressed", on);
+    $("advanced-btn").classList.toggle("on", on);
+  }
+  $("advanced-btn").addEventListener("click", () => {
+    store.set("ghostap-advanced", store.get("ghostap-advanced") === "1" ? "0" : "1");
+    applyAdvanced();
+    if (state.series.length) renderTimeline();
+  });
+  // menus (details.menu) close on outside clicks, Escape, and after choosing an item
+  document.addEventListener("click", (e) => {
+    document.querySelectorAll("details.menu[open]").forEach((m) => {
+      const item = e.target.closest("details.menu .menu-body button, details.menu .menu-body a");
+      if (!m.contains(e.target) || (item && m.contains(item))) m.removeAttribute("open");
+    });
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") document.querySelectorAll("details.menu[open]").forEach((m) => m.removeAttribute("open"));
+  });
+  // a menu opens towards the side with room, so it never leaves the window
+  document.addEventListener("toggle", (e) => {
+    const m = e.target;
+    if (!(m instanceof HTMLDetailsElement) || !m.classList.contains("menu") || !m.open) return;
+    const body = m.querySelector(".menu-body");
+    if (!body) return;
+    body.style.left = ""; body.style.right = "";
+    const r = body.getBoundingClientRect();
+    if (r.left < 8) { body.style.left = "0"; body.style.right = "auto"; }
+    else if (r.right > window.innerWidth - 8) { body.style.right = "0"; body.style.left = "auto"; }
+  }, true);
+  // the technical section stays open across refreshes; its chart is drawn when it opens
+  $("detail").addEventListener("toggle", (e) => {
+    if (e.target.id !== "tech-details") return;
+    state.techOpen = e.target.open;
+    if (e.target.open) drawSeries();
+  }, true);
+
   // F036: clock time switch
   function applyClock() {
     $("clock-btn").setAttribute("aria-pressed", state.clock);
@@ -1437,10 +1481,28 @@
     const name = h.split(/[?&=]/)[0];
     return views[name] ? name : "dashboard";
   }
+  // Four everyday pages in the bar; everything else in "More", each with a one-line purpose.
+  const PRIMARY = ["dashboard", "monitored", "sessions", "system"];
+  const PURPOSE = {
+    label: "Lab work: mark which access points were your test twin",
+    evaluation: "Lab work: measure how accurate detection is on labelled captures",
+    whatif: "Try other weights and thresholds without changing anything",
+    sensors: "Other GhostAP sensors that report to this one",
+    ask: "Ask questions about this session (AI, opt-in)",
+    settings: "Change detection and notification settings (admins)",
+    account: "Password, two-factor sign-in, signed-in devices",
+  };
+  const MORE_ORDER = ["label", "evaluation", "whatif", "sensors", "ask", "settings", "account"];
   function renderNav() {
-    const items = [["dashboard", T("nav.dashboard", "Dashboard")], ...Object.entries(views).map(([k, v]) => [k, T("nav." + k, v.title)])];
-    $("nav").innerHTML = items.map(([k, t]) =>
-      `<a href="#${k === "dashboard" ? "" : k}" class="nav-link ${k === currentView ? "active" : ""}" ${k === currentView ? 'aria-current="page"' : ""}>${esc(t)}</a>`).join("");
+    const name = (k) => (k === "dashboard" ? T("nav.dashboard", "Dashboard") : T("nav." + k, views[k].title));
+    const link = (k) => `<a href="#${k === "dashboard" ? "" : k}" class="nav-link ${k === currentView ? "active" : ""}" ${k === currentView ? 'aria-current="page"' : ""}>${esc(name(k))}</a>`;
+    const more = Object.keys(views).filter((k) => !PRIMARY.includes(k) && !views[k].navHidden)
+      .sort((a, b) => (MORE_ORDER.indexOf(a) + 1 || 99) - (MORE_ORDER.indexOf(b) + 1 || 99));
+    const inMore = more.includes(currentView);
+    $("nav").innerHTML = PRIMARY.filter((k) => k === "dashboard" || views[k]).map(link).join("") + (more.length ? `
+      <details class="menu nav-more"><summary class="nav-link ${inMore ? "active" : ""}">${inMore ? esc(name(currentView)) : "More"} ▾</summary>
+        <div class="menu-body menu-list">${more.map((k) => `<a href="#${k}" class="${k === currentView ? "on" : ""}">${esc(name(k))}<small>${esc(PURPOSE[k] || "")}</small></a>`).join("")}</div>
+      </details>` : "");
   }
   function route() {
     const name = viewFromHash();
@@ -1492,7 +1554,7 @@
     toggleClock: () => $("clock-btn").click(), toggleTheme: () => $("theme-btn").click(),
     exportCsv: () => $("export-csv").click(), tableRows: () => tableRows(),
     desktopNotifyOn: () => desktopNotifyOn(), toggleDesktopNotify: () => toggleDesktopNotify(),
-    setTab: (t) => setTab(t), viewLink: () => viewLink(), markAllSeen: () => { markSeen(state.ghost, true); renderSide(); },
+    setTab: (t) => setTab(t), viewLink: () => viewLink(), renderNav: () => renderNav(), markAllSeen: () => { markSeen(state.ghost, true); renderSide(); },
     setRange: (r) => { const b = document.querySelector(`[data-range="${r}"]`); if (b) b.click(); },
     currentView: () => currentView,
     register(name, view) { views[name] = view; renderNav(); if (viewFromHash() === name) route(); },
@@ -1522,6 +1584,7 @@
   state.clock = store.get("ghostap-clock") === "1";
   applyViewHash();
   applyClock();
+  applyAdvanced();
   renderSessionBanner();
   applyColumns();
   applyLayout();

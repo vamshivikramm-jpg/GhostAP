@@ -75,6 +75,10 @@
     if (box) box.focus();
   });
 
-  get("/api/ai/status").then((s) => { status = s; }).catch(() => { status = { enabled: false }; });
-  G.register("ask", { title: "Ask", async show(el) { root = el; if (!status) status = await get("/api/ai/status"); render(); }, hide() { root = null; } });
+  const view = { title: "Ask", navHidden: true,
+    async show(el) { root = el; if (!status) status = await get("/api/ai/status"); render(); }, hide() { root = null; } };
+  G.register("ask", view);
+  // listed in "More" only when AI help is switched on (the page still explains how otherwise)
+  get("/api/ai/status").then((s) => { status = s; view.navHidden = !s.enabled; G.renderNav(); })
+    .catch(() => { status = { enabled: false }; });
 })();

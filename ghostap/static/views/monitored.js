@@ -171,7 +171,7 @@
   }
 
   G.register("monitored", {
-    title: "Networks",
+    title: "Protected networks",
     show(el) {
       root = el;
       el.innerHTML = '<div class="card empty">Loading monitored networks…</div>';

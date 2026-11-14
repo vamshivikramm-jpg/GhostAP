@@ -117,11 +117,11 @@
     ["#verdict", "The verdict", "One sentence on what GhostAP thinks right now. It turns red when an evil twin is likely."],
     [".tiles", "The numbers", "Networks and access points heard, alerts by level, and how many alarms the simple name-only check would have raised."],
     [".card.side", "Alerts and networks", "Suspicious access points, highest risk first. Filter them, tick several to triage them together, or switch to the network view."],
-    ["#detail", "Why it was flagged", "Pick an access point to see what differs from the real network, which checks fired, its risk over time, and the evidence you can download."],
+    ["#detail", "Why it was flagged", "Pick an access point to see what differs from the real network, which checks fired and its risk over time. “Actions” holds accept, mute, downloads; deeper charts are under “Technical details”."],
     ["#timeline-card", "Risk over time", "Every access point's score. Dashed lines are the MEDIUM and HIGH thresholds. Add notes to mark what you did during an experiment."],
     ["#table-card", "Every access point", "Search, sort, choose columns and export to a spreadsheet."],
-    ["#nav", "More pages", "Monitored networks (saved baselines), past sessions, system health and the what-if page."],
-    [".top-actions", "Tools", "Presentation mode, layout, clock time and theme. Press Ctrl+K (⌘K on a Mac) for every command."],
+    ["#nav", "Pages", "Protected networks (saved baselines), past sessions and system health. “More” holds lab work, settings and your account, each with a one-line description."],
+    [".top-actions", "Help and options", "“How it works”, light / dark, and ⋯ for presentation mode, layout, clock time and the Advanced view (bulk triage, raw scores, notes). Ctrl+K (⌘K) finds anything."],
   ];
   let tourAt = -1, spot = null, card = null, lastFocus = null;
   function tourStep(i) {
