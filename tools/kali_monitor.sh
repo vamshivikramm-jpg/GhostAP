@@ -74,8 +74,11 @@ case $cmd in
     ip link set "$iface" down || true
     iw dev "$iface" set type managed || true
     ip link set "$iface" up || true
+    # 'start' stopped both (airmon-ng check kill); NetworkManager needs wpa_supplicant for Wi-Fi
+    systemctl reset-failed wpa_supplicant 2>/dev/null || true
+    systemctl start wpa_supplicant 2>/dev/null || true
     systemctl start NetworkManager 2>/dev/null || service NetworkManager start 2>/dev/null || true
-    info "$iface is back in managed mode; NetworkManager restarted (Wi-Fi may take a few seconds)"
+    info "$iface is back in managed mode; wpa_supplicant and NetworkManager restarted (Wi-Fi may take a few seconds)"
     ;;
 
   *)

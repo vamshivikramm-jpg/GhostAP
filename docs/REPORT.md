@@ -9,10 +9,10 @@
 | Department / College | _[Department, college name]_ |
 | Academic year | _[2026–27]_ |
 
-> Items in _[brackets]_ are placeholders. Section 7.4 is reserved for the results on the
-> real lab captures (Phase 2). Every other number in this report comes from
-> `python evaluate.py` on the synthetic evaluation set and can be reproduced from the
-> repository.
+> Items in _[brackets]_ are placeholders. Section 7.4 reports the first real lab captures
+> (Phase 2), recorded live with the project's sensor. Every other number in this report
+> comes from `python evaluate.py` on the synthetic evaluation set and can be reproduced
+> from the repository.
 
 ---
 
@@ -41,6 +41,9 @@ precision 0.18, F1 0.31 and a false-positive rate of 0.73. The beacon fingerprin
 catches a WPA2 twin that copies the vendor prefix, channel and signal level. GhostAP
 still misses an adaptive twin that also copies the real AP's beacon structure, leaving
 only its uptime different. This is a fundamental limit of beacon-only detection.
+In a first live test with a real adapter, the detector caught all three phone-hotspot twins
+and raised no alert for 141 legitimate access points. The test also exposed two
+false-positive sources that synthetic data cannot show; both were fixed.
 
 ---
 
@@ -512,7 +515,8 @@ overstates performance.
    beacon-structure profiles in particular, were designed by the authors. The s04 result
    therefore shows that the fingerprint works *if* the twin's hardware or software builds
    beacons differently from the real APs. That is very likely for a laptop or phone twin
-   against an enterprise network, but it has to be confirmed on real devices. The
+   against an enterprise network, but it has to be confirmed on real devices (a first
+   confirmation with one phone and one router is in Section 7.4). The
    captures are also cleaner than real radio traffic: no frame loss and no co-channel
    interference.
 3. **The baseline must be clean.** If an attack is already running during the baseline
@@ -532,8 +536,9 @@ Several items that were listed here have since been built, but each still has to
 validated on real captures before it can be reported as a result:
 
 - Timing fingerprints: beacon clock skew (with a significance test) and beacon-rate checks
-  are implemented. They are the most promising route to the s11 case, but have only been
-  exercised on synthetic frames.
+  are implemented. They are the most promising route to the s11 case. Live data showed
+  that clock skew must be measured between access points, not against the sensor's clock
+  (Section 7.4); a cloned-BSSID twin has not yet been tested live.
 - Learned weights: `evaluate.py --extended` fits logistic-regression weights on a tune split
   and scores them on a separate test split. On the synthetic set they are not better than the
   configured weights; the configured weights stay in use.
@@ -551,12 +556,77 @@ Still open:
 
 ### 7.4 Results on real lab captures (Phase 2)
 
-> _[To be completed after Phase 2. Record captures on Linux in a controlled lab, with your
-> own AP and your own evil twin:
-> `sudo .venv/bin/python -m ghostap.web --iface wlan1 --hop 1,6,11 --save-pcap lab1.pcap`.
-> Label each with `python tools/label_capture.py lab1.pcap --evil <twin BSSID>`, run
-> `python evaluate.py --dataset <dir>`, and report the same tables and figures here.
-> Compare them with Section 6.]_
+GhostAP was run live on 14 November 2026 with the project's sensor: a TP-Link Archer T2U
+Plus (Realtek RTL8821AU, `88XXau` driver) in monitor mode on Kali Linux 2024.3, kernel
+6.8, in a virtual machine. It hopped the 2.4 GHz channels. The legitimate network was the
+authors' own WPA2 router. The evil twin was the authors' own phone hotspot, renamed to the
+router's network name. GhostAP only listened; nothing was transmitted. Neighbouring
+networks, whose beacons were also received, were labelled legitimate and are not named.
+The full test log is in `docs/testing/live-kali-validation.md`.
+
+| Run | Duration | Access points | Twin |
+|---|---|---|---|
+| run1 | 27.7 min | 52 | none (false-positive run) |
+| run2 | 21.4 min | 48 | phone hotspot, WPA2 with a different password |
+| run3 | 30.5 min | 44 | phone hotspot, WPA2, then switched to open |
+
+The recordings were labelled with `tools/label_capture.py` and scored with `evaluate.py`,
+exactly like the synthetic set (one SSID and BSSID per capture is one unit):
+
+| Detector (live) | TP | FP | TN | FN | Precision | Recall | F1 | FPR | Latency mean / max |
+|---|---|---|---|---|---|---|---|---|---|
+| GhostAP (live) | 3 | 0 | 141 | 0 | 1.00 | 1.00 | 1.00 | 0.00 | 18.4 s / 22.2 s |
+| Duplicate-SSID baseline (live) | 3 | 2 | 139 | 0 | 0.60 | 1.00 | 0.75 | 0.01 | 0 s |
+
+The twins' peak scores were 38.1 and 31.5 for the two WPA2 twins and 59.2 for the open
+twin. The legitimate access points' peak scores averaged 2.7 (highest 19.4). The router's own peak
+scores were 0.0, 11.0 and 0.3 in the three runs, well below the threshold, while the
+duplicate-SSID baseline flagged it as soon as a twin appeared.
+
+**What the live data confirmed.**
+- The beacon fingerprint works on real devices: the phone built its beacons differently
+  from the router and was flagged by its structure every time. The phone picked a new random
+  BSSID each time the hotspot was switched on, but its fingerprint stayed the same.
+- The open twin was caught by the security downgrade, fingerprint, new address, channel
+  and signal indicators together, at the first scoring round after it appeared.
+- When the twin was switched off, its score fell to zero while its alert stayed open for
+  review, and the router's baseline was not changed.
+
+**What differed from the synthetic assumptions.**
+- A phone hotspot does **not** look freshly booted. The phone's beacon clock showed
+  2.8 days of uptime, so the uptime indicator stayed silent. The synthetic twins assume a
+  fresh boot, which makes their scores optimistic. The real open twin peaked at 59, below
+  HIGH (60), while the synthetic s01 twin reaches 77.
+- A twin with the **same security** is a narrow case. The real WPA2 twins scored only
+  31.5 to 38.1, just above the alert threshold of 30, from their new address and beacon
+  structure alone. The threshold was not lowered: the sweep on these three captures would
+  prefer 20, but thresholds are not tuned on the data used for reporting.
+- A same-name WPA2 twin causes real deauthentication traffic. The authors' devices tried
+  the router's saved password on the twin and failed the 4-way handshake (reason code 15).
+
+**Bugs that only real data exposed (fixed before the numbers above).**
+- *Clock skew against the sensor clock.* The virtual machine's clock was being adjusted
+  by its time-sync services. Every access point therefore appeared to drift by about
+  +250 ppm while the baseline was learned and about −110 ppm a few minutes later, and the
+  clock-skew check flagged 18 of 22 networks. Skew is now measured between access points
+  (each AP's TSF against the TSF of up to 15 others at the same moments), so the sensor's
+  clock error cancels. Per-AP skew then stayed within about 2 ppm across time windows.
+- *Off-channel reception read as two transmitters.* While hopping, the phone was heard at
+  about −8 dBm near its own channel and about −48 dBm five to eight channels away. The two-signal-level
+  check reported this as two devices sharing one address. Signal levels are now compared
+  only for frames received on or next to the access point's own channel.
+
+With the code from before these fixes, the verdicts on the three captures were the same,
+but legitimate access points averaged 8.5 instead of 2.7. The WPA2 twins' scores were
+inflated by the same false evidence. The synthetic results in Section 6 are unchanged by
+the fixes.
+
+**Limits of this result.** Three twins, all from one phone, in one location, with one
+sensor, on 2.4 GHz only, in runs of under 31 minutes. That is enough to show the detector
+works on real radio traffic and to find real bugs, not to estimate its accuracy in
+general. Still to test live: a second legitimate AP with the same name, a twin that clones
+the BSSID or copies the beacon structure (the s11 case), `hostapd` and travel-router twins,
+5 GHz, and multi-hour runs.
 
 ---
 
