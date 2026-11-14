@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GhostAP: Project Overview</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm; }
+  :root { --ink:#1b2430; --muted:#5b6675; --line:#d9dee5; --accent:#1f5fbf; --accent-soft:#e8f0fc;
+          --warn:#a15c00; --warn-soft:#fff4e0; --good:#1e7a46; --good-soft:#e6f5ec; --bad:#b3261e; --bad-soft:#fdecea; }
+  * { box-sizing: border-box; }
+  body { font-family: "DejaVu Sans", "Liberation Sans", Arial, sans-serif; color: var(--ink); font-size: 10pt; line-height: 1.45; margin: 0; background: #fff; }
+  h1 { font-size: 20pt; margin: 0 0 6pt; color: var(--accent); }
+  h2 { font-size: 14.5pt; margin: 18pt 0 6pt; color: var(--accent); border-bottom: 1.5pt solid var(--accent); padding-bottom: 3pt; break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 12pt 0 4pt; break-after: avoid; }
+  p { margin: 0 0 6pt; }
+  ul { margin: 0 0 6pt 16pt; padding: 0; } li { margin: 1.5pt 0; }
+  code, .mono { font-family: "DejaVu Sans Mono", "Liberation Mono", monospace; font-size: 8.6pt; }
+  table { width: 100%; border-collapse: collapse; margin: 4pt 0 10pt; font-size: 8.8pt; }
+  th, td { border: 0.6pt solid var(--line); padding: 3.5pt 5pt; vertical-align: top; text-align: left; }
+  th { background: #f2f4f7; font-weight: bold; }
+  tr { break-inside: avoid; }
+  td.id { font-family: "DejaVu Sans Mono", monospace; white-space: nowrap; width: 38pt; color: var(--accent); font-weight: bold; }
+  td.name { width: 120pt; font-weight: bold; }
+  td.st { width: 52pt; white-space: nowrap; }
+  .num { text-align: right; white-space: nowrap; }
+  .tag { display: inline-block; padding: 0 5pt; border-radius: 8pt; font-size: 7.6pt; border: 0.6pt solid; }
+  .ok { color: var(--good); background: var(--good-soft); border-color: var(--good); }
+  .hw { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
+  .box { border: 0.8pt solid var(--line); border-left: 3pt solid var(--accent); background: var(--accent-soft); padding: 6pt 8pt; margin: 6pt 0 10pt; break-inside: avoid; }
+  .box.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+  .box.good { border-left-color: var(--good); background: var(--good-soft); }
+  .cover { height: 255mm; display: flex; flex-direction: column; justify-content: space-between; break-after: page; }
+  .cover .title { margin-top: 55mm; }
+  .cover h1 { font-size: 34pt; margin-bottom: 4pt; }
+  .cover .sub { font-size: 15pt; color: var(--muted); margin-bottom: 18pt; }
+  .cover .lead { font-size: 11pt; max-width: 150mm; }
+  .cover .meta { font-size: 9pt; color: var(--muted); border-top: 1pt solid var(--line); padding-top: 6pt; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6pt; margin: 6pt 0 10pt; }
+  .kpi { border: 0.8pt solid var(--line); border-radius: 4pt; padding: 6pt; break-inside: avoid; }
+  .kpi b { display: block; font-size: 15pt; color: var(--accent); }
+  .kpi span { font-size: 8pt; color: var(--muted); }
+  .toc li { margin: 2pt 0; }
+  .pb { break-before: page; }
+  .diagram { margin: 6pt 0 10pt; break-inside: avoid; }
+  .formula { font-family: "DejaVu Serif", Georgia, serif; font-size: 12pt; text-align: center; margin: 6pt 0; }
+  .small { font-size: 8.4pt; color: var(--muted); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10pt; }
+</style>
+</head>
+<body>
+
+<!-- ====================================================================== COVER -->
+<section class="cover">
+  <div class="title">
+    <h1>GhostAP</h1>
+    <div class="sub">Passive Evil Twin Wi-Fi Detection<br>and Airspace Assurance</div>
+    <p class="lead">A project overview: what GhostAP is, how it detects rogue and impersonating Wi-Fi access
+      points, and an explanation of every feature it has.</p>
+  </div>
+  <div class="meta">
+    College cybersecurity project · Overview document generated 14 November 2026 from the repository
+    (branch <span class="mono">main</span>, commit <span class="mono">45d6047</span>) ·
+    Python 3.11+ · Linux (live capture) and any OS (offline analysis) ·
+    GhostAP only listens: it never transmits, injects or deauthenticates.
+  </div>
+</section>
+
+<!-- ====================================================================== CONTENTS -->
+<h2>Contents</h2>
+<ol class="toc">
+  <li>What GhostAP is about</li>
+  <li>GhostAP at a glance</li>
+  <li>How GhostAP works: from radio frames to an explained alert</li>
+  <li>How GhostAP detects an evil twin: the eight indicators</li>
+  <li>Scoring, temporal smoothing and alerts</li>
+  <li>The other detectors and signatures</li>
+  <li>A worked example from a real live test</li>
+  <li>Feature catalogue: every feature explained (F001–F091)</li>
+  <li>Features added in releases 2.1 and 2.2</li>
+  <li>Security and privacy by design</li>
+  <li>How well it works: synthetic, live and Kismet results</li>
+  <li>Limitations and what comes next</li>
+</ol>
+
+<!-- ====================================================================== 1 -->
+<h2>1. What GhostAP is about</h2>
+<h3>The problem: evil twins</h3>
+<p>An <b>evil twin</b> is a rogue Wi-Fi access point (AP) that copies the network name (SSID) of a legitimate
+network, for example a college, café or office network. Phones and laptops connect to whichever access point
+with a known name looks best, usually the strongest one. Once a victim joins the twin, the attacker
+can watch or manipulate their traffic, or show a fake login page to steal passwords. An evil twin is cheap to
+build: a laptop with <span class="mono">hostapd</span>, a travel router, or simply a phone hotspot renamed to the
+victim network's name.</p>
+<p>The naive defence, "alert when two access points share a name", does not work. Real networks
+routinely use many access points with the same name (enterprise Wi-Fi, mesh systems, range extenders), so
+that rule produces a flood of false alarms. In GhostAP's own evaluation it raised false alarms on 73 % of
+legitimate access points.</p>
+
+<h3>The approach: passive, multi-indicator, explainable</h3>
+<ul>
+  <li><b>Passive.</b> GhostAP only listens to two kinds of 802.11 management frames that every access point
+    broadcasts openly: <b>beacons</b> and <b>probe responses</b> (plus deauthentication/disassociation frames, counted
+    without client addresses). It never transmits, never injects frames, never captures user traffic and
+    never decrypts anything.</li>
+  <li><b>Learns what normal looks like.</b> For each network name it learns, during a short learning period
+    (2 minutes by default) or from a saved baseline, which access points, vendors, channels, security settings,
+    signal levels, clocks and beacon structures are normal.</li>
+  <li><b>Many weak signals, not one rule.</b> Eight independent indicators each measure one way a twin
+    usually differs from the real network. They are combined into a 0–100 risk score with weights.</li>
+  <li><b>Over time, not per frame.</b> Scores are smoothed over 30 seconds, so a single odd frame can never
+    raise an alert.</li>
+  <li><b>Explainable.</b> Every alert lists each indicator's contribution in points, a plain-language reason,
+    and the innocent explanations an analyst should rule out.</li>
+</ul>
+<div class="box"><b>Positioning.</b> GhostAP is a <b>Wireless Intrusion Detection and Airspace Assurance</b> system:
+it detects suspicious access points and checks that the airspace matches what the owner declared. It is
+deliberately <b>not</b> a wireless intrusion <i>prevention</i> system: it never attacks or disconnects devices
+over the air.</div>
+<div class="box warn"><b>Ethics and scope.</b> Use GhostAP only on networks you own or are authorised to monitor.
+Lab evil twins (phone hotspot, <span class="mono">hostapd</span>) run only on your own equipment.</div>
+
+<!-- ====================================================================== 2 -->
+<h2>2. GhostAP at a glance</h2>
+<div class="kpis">
+  <div class="kpi"><b>8</b><span>weighted indicators + 3 signatures</span></div>
+  <div class="kpi"><b>91 + 9</b><span>catalogue features + additions in 2.1/2.2</span></div>
+  <div class="kpi"><b>269</b><span>automated tests (CI on Python 3.11–3.13)</span></div>
+  <div class="kpi"><b>~11,000</b><span>lines of Python in 44 modules</span></div>
+  <div class="kpi"><b>3 / 3</b><span>real lab twins detected live, 0 false alarms</span></div>
+  <div class="kpi"><b>18 s</b><span>mean detection latency on live captures</span></div>
+  <div class="kpi"><b>0.91</b><span>F1 on the synthetic set (vs 0.31 baseline)</span></div>
+  <div class="kpi"><b>~15 %</b><span>of one CPU core while capturing live</span></div>
+</div>
+<table>
+  <tr><th>Part</th><th>Technology</th><th>Role</th></tr>
+  <tr><td>Capture</td><td>Scapy, <span class="mono">iw</span>, Linux monitor mode</td><td>Receives beacons and probe responses, hops channels, records pcap files</td></tr>
+  <tr><td>Storage</td><td>SQLite (one database per session) + <span class="mono">admin.db</span></td><td>Frames, AP profiles, scores, alerts, audit log, accounts, baseline versions</td></tr>
+  <tr><td>Detection</td><td>Python (numpy only for statistics)</td><td>Baselines, indicators, risk engine, detectors, incidents</td></tr>
+  <tr><td>Dashboard</td><td>Flask + waitress (HTTP) / cheroot (HTTPS), Plotly served locally</td><td>Live web dashboard, 97 HTTP endpoints, sign-in, roles</td></tr>
+  <tr><td>Evaluation</td><td><span class="mono">evaluate.py</span>, matplotlib</td><td>Precision, recall, F1, false-positive rate, latency, confidence intervals</td></tr>
+  <tr><td>Sensor hardware</td><td>TP-Link Archer T2U Plus (Realtek RTL8821AU)</td><td>Verified live on Kali Linux: 2.4 GHz and 5 GHz receive</td></tr>
+</table>
+
+<!-- ====================================================================== 3 -->
+<h2 class="pb">3. How GhostAP works: from radio frames to an explained alert</h2>
+<div class="diagram">
+<svg viewBox="0 0 700 300" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="DejaVu Sans, Arial" font-size="11">
+  <defs><marker id="a" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1f5fbf"/></marker></defs>
+  <g stroke="#1f5fbf" fill="#e8f0fc" stroke-width="1.2">
+    <rect x="10" y="20" width="120" height="54" rx="6"/><rect x="160" y="20" width="120" height="54" rx="6"/>
+    <rect x="310" y="20" width="120" height="54" rx="6"/><rect x="460" y="20" width="110" height="54" rx="6"/>
+    <rect x="590" y="20" width="100" height="54" rx="6"/>
+    <rect x="10" y="130" width="160" height="54" rx="6"/><rect x="200" y="130" width="140" height="54" rx="6"/>
+    <rect x="370" y="130" width="150" height="54" rx="6"/><rect x="550" y="130" width="140" height="54" rx="6"/>
+    <rect x="120" y="230" width="200" height="54" rx="6"/><rect x="380" y="230" width="200" height="54" rx="6"/>
+  </g>
+  <g fill="#1b2430" text-anchor="middle">
+    <text x="70" y="42" font-weight="bold">1 Capture</text><text x="70" y="58">monitor mode,</text><text x="70" y="70">channel hopping</text>
+    <text x="220" y="42" font-weight="bold">2 Parse</text><text x="220" y="58">SSID, BSSID, RSN,</text><text x="220" y="70">TSF, seq, structure</text>
+    <text x="370" y="42" font-weight="bold">3 Store</text><text x="370" y="58">SQLite session,</text><text x="370" y="70">pcap recording</text>
+    <text x="515" y="42" font-weight="bold">4 Profile</text><text x="515" y="58">per-AP stats,</text><text x="515" y="70">incremental</text>
+    <text x="640" y="42" font-weight="bold">5 Baseline</text><text x="640" y="58">learned or</text><text x="640" y="70">saved (signed)</text>
+    <text x="90" y="152" font-weight="bold">6 Indicators</text><text x="90" y="168">8 values in [0,1]</text><text x="90" y="180">+ signatures</text>
+    <text x="270" y="152" font-weight="bold">7 Risk score</text><text x="270" y="168">R = Σwx / Σw × 100</text><text x="270" y="180">every 10 s</text>
+    <text x="445" y="152" font-weight="bold">8 Smooth + level</text><text x="445" y="168">mean of last 3,</text><text x="445" y="180">MEDIUM ≥ 30, HIGH ≥ 60</text>
+    <text x="620" y="152" font-weight="bold">9 Alert</text><text x="620" y="168">reasons, points,</text><text x="620" y="180">benign causes</text>
+    <text x="220" y="252" font-weight="bold">10 Dashboard + API</text><text x="220" y="268">triage, incidents, evidence</text>
+    <text x="480" y="252" font-weight="bold">11 Notify + evaluate</text><text x="480" y="268">webhooks, SIEM, metrics</text>
+  </g>
+  <g stroke="#1f5fbf" stroke-width="1.4" fill="none" marker-end="url(#a)">
+    <path d="M130,47 L158,47"/><path d="M280,47 L308,47"/><path d="M430,47 L458,47"/><path d="M570,47 L588,47"/>
+    <path d="M640,74 L640,100 L90,100 L90,128"/><path d="M170,157 L198,157"/><path d="M340,157 L368,157"/><path d="M520,157 L548,157"/>
+    <path d="M620,184 L620,210 L220,210 L220,228"/><path d="M620,210 L480,210 L480,228"/>
+  </g>
+</svg>
+</div>
+
+<h3>Step 1: capture</h3>
+<p>On Linux, a USB Wi-Fi adapter is put into <b>monitor mode</b> (<span class="mono">tools/kali_monitor.sh</span>), in
+which it receives every frame on its channel without joining any network. An adapter hears one channel at a
+time, so GhostAP <b>hops channels</b> (for example 1, 6, 11 or all 2.4 and 5 GHz channels, 0.25 s each). A twin
+on another channel than the real AP is therefore still heard. Live capture keeps one capture socket open for the
+whole run and can record everything it keeps to a <b>pcap</b> file for later replay and labelling. GhostAP
+also works fully offline by <b>replaying a pcap</b> on any operating system.</p>
+<h3>Step 2: parse</h3>
+<p>Each beacon or probe response becomes an observation with: time, network name, BSSID (the AP's MAC
+address), vendor prefix (OUI), channel, tuned frequency, signal strength (RSSI), security (open, WEP, WPA,
+WPA2, WPA3, transition modes), the detailed RSN fields (ciphers, key management, protected management frames),
+beacon interval, the AP's internal clock (TSF), sequence number, and a <b>beacon fingerprint</b> (a hash of how the beacon
+is built). <b>Damaged frames are rejected, never repaired</b>: a bad checksum, a truncated frame or a malformed
+element is counted and dropped, because a "repaired" frame could invent a network or make a WPA2 network look
+open.</p>
+<h3>Steps 3–5: store, profile, baseline</h3>
+<p>Observations go into a per-session SQLite database. AP profiles (first/last seen, channels, security, signal
+statistics) are updated incrementally. The <b>baseline</b> is what each network normally looks like: either
+learned from the first 2 minutes of the session, or loaded from a <b>saved, signed baseline</b> of protected
+networks (so a twin that is already on the air at start-up is still caught).</p>
+<h3>Steps 6–9: indicators, score, smoothing, alert</h3>
+<p>Every 10 seconds of capture time, every access point is evaluated on its last 10 seconds of frames by eight
+indicators. Their weighted sum is the raw risk score, which is averaged with the two previous rounds. When the
+smoothed score reaches 30 an alert is raised (MEDIUM), at 60 it escalates to HIGH. Sections 4 and 5 explain
+this in detail.</p>
+<h3>Steps 10–11: dashboard, notifications, evaluation</h3>
+<p>The web dashboard shows a plain verdict, alerts ranked by risk, every network and AP, a side-by-side comparison
+of a suspicious AP with the real ones, risk timelines, incidents and evidence. Alerts can be sent to webhooks,
+phone push, e-mail or a SIEM. The evaluation tools measure accuracy on labelled captures.</p>
+
+<!-- ====================================================================== 4 -->
+<h2>4. How GhostAP detects an evil twin: the eight indicators</h2>
+<p>Each indicator looks at one access point (one SSID + BSSID pair) and returns a value between 0 (nothing
+suspicious) and 1 (strongly suspicious), plus a reason in plain language. Each targets something a twin finds
+hard or expensive to copy, and each has known innocent explanations, which the alert lists.</p>
+<table>
+  <tr><th>Indicator</th><th class="num">Weight</th><th>What it measures and when it fires</th><th>Why it works / innocent causes</th></tr>
+  <tr><td class="name">Security downgrade</td><td class="num">3.0</td><td>The AP offers weaker security than the network used in the baseline: WPA2 → WPA = 0.5; → WEP or open = 1.0. A detailed check also catches weaker parts of WPA2/WPA3: a broken TKIP cipher, a missing protected-management-frames requirement, WPA3 → WPA3/WPA2 transition, enterprise → password.</td><td>Most twins are open or use a different password because the attacker does not know the real one. Innocent: a misconfiguration or a guest network change.</td></tr>
+  <tr><td class="name">New BSSID / vendor</td><td class="num">2.0</td><td>The BSSID was not in the baseline. Same vendor prefix as the real APs = 0.3 (could be a newly added AP); an unknown vendor or a <i>randomised</i> (locally administered) MAC = 1.0.</td><td>Laptops and phones used as twins have other vendors or random MACs. Innocent: a new AP from another brand, a mesh node.</td></tr>
+  <tr><td class="name">Channel deviation</td><td class="num">1.0</td><td>A new BSSID on a channel the network never used = 1.0; a known BSSID that changed channel = 0.5.</td><td>Twins often pick their own channel. Low weight: real networks change channel too (automatic channel selection).</td></tr>
+  <tr><td class="name">Signal (RSSI) jump</td><td class="num">1.5</td><td>The AP is much stronger than expected: more than max(6 dB, 3σ) above its own baseline (known BSSID) or the strongest baseline AP (new BSSID), reaching 1.0 at 10 dB beyond that margin. Only frames heard on or next to the AP's own channel are used.</td><td>Attackers sit close to victims to win the "strongest AP" race. Innocent: the sensor was moved, power increased.</td></tr>
+  <tr><td class="name">TSF / clock anomaly</td><td class="num">2.0</td><td>Every AP has a microsecond counter (TSF) that runs from boot. Fires on a counter reset (reboot, or two devices using one address), on an uptime far below the network's other APs (log-scale ratio: a device booted seconds ago next to APs up for days), or on a <b>change in clock drift</b> of a known address, measured against other APs' clocks.</td><td>A twin is usually freshly started, and a cloned address on other hardware has a different crystal. Innocent: a reboot or firmware update.</td></tr>
+  <tr><td class="name">Beacon fingerprint</td><td class="num">2.5</td><td>A hash of how the beacon is <i>built</i>: order of information elements, rate sets, HT/VHT/HE capabilities, extended capabilities, vendor element types. A new BSSID whose structure matches none of the network's = 1.0; a known BSSID whose structure changed = 0.6.</td><td>Router firmware, Linux hostapd and phone hotspots build beacons differently, even when SSID, vendor, channel and security are copied. Innocent: a firmware update, a different AP model.</td></tr>
+  <tr><td class="name">BSSID conflict (clone)</td><td class="num">2.5</td><td>One address seems to be used by two transmitters: frames keep alternating between channels (unless one sequence counter continues across the flips, which means one radio), the same address is heard at two clearly separate signal levels at the same time, or sequence numbers repeatedly go backwards.</td><td>A twin that clones the real BSSID cannot share its frame counter. Hard to explain innocently.</td></tr>
+  <tr><td class="name">Beacon interval / rate</td><td class="num">1.0</td><td>The advertised beacon interval differs from the network's usual one, or the AP beacons much faster than its own interval allows (a beacon-flood or fake-AP tool).</td><td>Different software uses different defaults. Innocent: a configuration change.</td></tr>
+</table>
+<p class="small">Σ weights = 15.5. Weights are set in <span class="mono">config.yaml</span>; per-network switches can turn single
+indicators off and change the alert threshold. TSF uses each AP's first frames and full reset history, not just
+the 10-second window.</p>
+
+<!-- ====================================================================== 5 -->
+<h2>5. Scoring, temporal smoothing and alerts</h2>
+<div class="formula">R = ( Σ w<sub>i</sub> · x<sub>i</sub> ) / ( Σ w<sub>i</sub> ) × 100</div>
+<p>x<sub>i</sub> is indicator i's value (0–1) and w<sub>i</sub> its weight. A twin that only differs in vendor
+(1.0 × 2.0) scores 12.9; an open twin with a new random MAC, a new structure, another channel and a stronger
+signal scores 50–60.</p>
+<ul>
+  <li><b>Every 10 s</b> (capture time) each AP is scored using only its frames from the last 10 s.</li>
+  <li><b>Smoothing:</b> the shown score is the mean of the last 3 raw scores, counting 0 while the AP is silent.
+    One odd beacon therefore adds at most a third of its score and cannot raise an alert on its own.</li>
+  <li><b>Levels:</b> LOW &lt; 30 ≤ <b>MEDIUM</b> (alert) &lt; 60 ≤ <b>HIGH</b>.</li>
+  <li><b>Signatures as score floors:</b> KARMA, look-alike names and known attack tools raise the score to a
+    minimum value instead of adding weight, so they cannot shift the evaluated numbers.</li>
+  <li><b>Alert content:</b> level, peak score, when it first fired and when it reached HIGH, every indicator's value ×
+    weight = points with a reason, and a list of possible benign causes to rule out.</li>
+  <li><b>Incremental:</b> each round reads only new frames; a test proves incremental scoring equals a one-shot
+    run. Detector memory is capped (30 minutes of history by default) without changing scores.</li>
+</ul>
+
+<!-- ====================================================================== 6 -->
+<h2>6. The other detectors and signatures</h2>
+<table>
+  <tr><th>Detector</th><th>What it looks for</th></tr>
+  <tr><td class="name">KARMA / MANA (F001)</td><td>One radio answering for three or more different network names: rogue-AP tools answer every name a phone asks for.</td></tr>
+  <tr><td class="name">Look-alike names (F002)</td><td>A name that imitates a known network: one or two characters different, homoglyphs, case changes (e.g. "MVSR_WIFI" vs "MVSR_WiFi"). The look-alike is then judged against the network it imitates.</td></tr>
+  <tr><td class="name">Attack-tool fingerprints (F003)</td><td>Beacon structures / vendor prefixes of known tools from a library file (format and loader built; real fingerprints come from lab recordings).</td></tr>
+  <tr><td class="name">Deauthentication bursts (F005)</td><td>Many deauthentication/disassociation frames against one AP within 10 s (10 = MEDIUM, 30 = HIGH), used to push victims onto a twin. Client addresses are never stored; reason codes are, and "station is leaving" frames count one third. The alert names the most common reason and flags login-failure storms.</td></tr>
+  <tr><td class="name">Beacon flood (F008)</td><td>Many new radios appearing within a minute (tools such as mdk), after the warm-up.</td></tr>
+  <tr><td class="name">Duplicate-SSID baseline</td><td>The naive comparison detector: flags every AP whose name is used by more than one AP. Shown only "for comparison" so evaluations can prove GhostAP is better.</td></tr>
+  <tr><td class="name">Incidents (F012)</td><td>Related alerts (same network, close in time, deauth bursts plus a twin) grouped into one incident with a timeline story.</td></tr>
+</table>
+
+<!-- ====================================================================== 7 -->
+<h2>7. A worked example from a real live test</h2>
+<p>On 14 November 2026 GhostAP ran live on Kali Linux with the project's adapter. The lab router (WPA2,
+channel 2) was learned during the 2-minute learning period. Then the owner's phone hotspot was renamed to the
+router's network name and switched on <b>without a password</b>. GhostAP raised a MEDIUM alert at its first
+scoring round after the hotspot appeared (about 11 s):</p>
+<table>
+  <tr><th>Indicator</th><th class="num">Value</th><th class="num">Points</th><th>Reason shown on the dashboard</th></tr>
+  <tr><td>Security downgrade</td><td class="num">1.00</td><td class="num">+19.4</td><td>advertises OPN but the network used WPA2/PSK during the baseline</td></tr>
+  <tr><td>Beacon fingerprint</td><td class="num">1.00</td><td class="num">+16.1</td><td>beacon structure matches none of the network's fingerprints (different hardware)</td></tr>
+  <tr><td>New BSSID / vendor</td><td class="num">1.00</td><td class="num">+12.9</td><td>new BSSID with a locally administered (randomised) MAC</td></tr>
+  <tr><td>Signal jump</td><td class="num">0.69</td><td class="num">+6.7</td><td>13 dB stronger than the strongest baseline AP</td></tr>
+  <tr><td>Channel deviation</td><td class="num">1.00</td><td class="num">+6.5</td><td>channel 11, which the network never used (used: 2)</td></tr>
+  <tr><td colspan="2"><b>Raw score</b></td><td class="num"><b>≈ 61.6</b></td><td>smoothed peak 59.2 → MEDIUM alert; the real router stayed at 0.3</td></tr>
+</table>
+<p>The same phone with a <b>password</b> (same security as the router, same channel) is the hard case: it scored
+31–38, caught only by its beacon structure and its random address. The phone also used a new random BSSID every
+time the hotspot was switched on, but its beacon fingerprint was identical each time.</p>
+
+<!-- ====================================================================== 8 -->
+<h2 class="pb">8. Feature catalogue: every feature explained</h2>
+<p>All 91 features of the expansion catalogue are built. <span class="tag ok">done</span> = built and tested;
+<span class="tag hw">done*</span> = built and tested with simulated data, but full confirmation needs real hardware, an
+external account (e-mail, phone push, API key) or more real captures.</p>
+
+<h3>A. Core pipeline (the original phases)</h3>
+<table>
+  <tr><th>Feature</th><th>Explanation</th></tr>
+  <tr><td class="name">Collector</td><td>Reads beacons, probe responses and deauth frames from a pcap or live from a monitor-mode adapter, with channel hopping and optional pcap recording (<span class="mono">python -m ghostap.collector</span>).</td></tr>
+  <tr><td class="name">Parser</td><td>Turns a raw frame into an observation (all fields listed in section 3), rejects damaged frames and counts them by reason.</td></tr>
+  <tr><td class="name">Storage</td><td>SQLite with versioned migrations; a newer database is refused by an older GhostAP instead of being misread.</td></tr>
+  <tr><td class="name">Indicators + Analyzer</td><td>The eight indicators and signatures, with baselines (section 4).</td></tr>
+  <tr><td class="name">Risk engine</td><td>Weighted score, smoothing, levels, alerts, incremental scoring (section 5).</td></tr>
+  <tr><td class="name">Dashboard</td><td>Flask web app: verdict banner, tiles, alerts, networks, AP detail with side-by-side comparison, triage, risk timeline, searchable AP table, keyboard shortcuts.</td></tr>
+  <tr><td class="name">Evaluation</td><td><span class="mono">evaluate.py</span>: precision, recall, F1, false-positive rate and latency against the duplicate-SSID baseline, per scenario, with a threshold sweep and charts.</td></tr>
+  <tr><td class="name">Synthetic data</td><td>Generators for a test capture and an 11-scenario evaluation set (author-designed: twins of increasing difficulty and benign changes such as reboots, power and channel changes, enterprise networks).</td></tr>
+</table>
+
+<h3>B. Detection engine and capture quality</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F001</td><td class="name">KARMA / MANA detection</td><td class="st"><span class="tag ok">done</span></td><td>Flags a radio that uses three or more network names, the behaviour of rogue-AP tools that answer every name a phone probes for.</td></tr>
+  <tr><td class="id">F002</td><td class="name">Look-alike network names</td><td class="st"><span class="tag ok">done</span></td><td>Catches names imitating a known network (small edit distance, homoglyphs, case) and judges the look-alike against the network it imitates.</td></tr>
+  <tr><td class="id">F003</td><td class="name">Attack-tool fingerprint library</td><td class="st"><span class="tag hw">done*</span></td><td>A library of beacon structures and vendor prefixes of known tools; a match raises the score floor. Ships with clearly marked synthetic examples; real fingerprints come from lab recordings.</td></tr>
+  <tr><td class="id">F004</td><td class="name">Detailed security downgrade</td><td class="st"><span class="tag ok">done</span></td><td>Compares RSN details, not just the label: pairwise and group ciphers (TKIP/WEP), protected management frames, WPA3 → transition, enterprise → password, OWE.</td></tr>
+  <tr><td class="id">F005</td><td class="name">Deauthentication flood detection</td><td class="st"><span class="tag ok">done</span></td><td>Counts deauth/disassoc frames per AP in a sliding window; names the reason code; leave reasons count one third. Confirmed on real traffic.</td></tr>
+  <tr><td class="id">F006</td><td class="name">Two transmitters, one address</td><td class="st"><span class="tag ok">done</span></td><td>Finds two clearly separated signal levels alternating on one BSSID, compared only on frames heard on the AP's own channel.</td></tr>
+  <tr><td class="id">F007</td><td class="name">Beacon clock-skew fingerprint</td><td class="st"><span class="tag hw">done*</span></td><td>Measures each AP's crystal drift against other APs' clocks (immune to the sensor's own clock adjustments) and flags a known address whose drift changed. A cloned-BSSID twin is not yet tested live.</td></tr>
+  <tr><td class="id">F008</td><td class="name">Beacon-rate anomaly</td><td class="st"><span class="tag ok">done</span></td><td>Flags an AP beaconing much faster than its advertised interval allows (fake-AP and flood tools).</td></tr>
+  <tr><td class="id">F009</td><td class="name">Wi-Fi 6 / 6E awareness</td><td class="st"><span class="tag hw">done*</span></td><td>Understands 6 GHz frequencies and HE elements, and hops 6 GHz preferred channels. Needs a 6 GHz adapter to confirm (the project's adapter has none).</td></tr>
+  <tr><td class="id">F010</td><td class="name">Passive hidden-network matching</td><td class="st"><span class="tag ok">done</span></td><td>Learns the real name of a hidden network from its probe responses, without sending anything, so hidden networks can be protected too.</td></tr>
+  <tr><td class="id">F011</td><td class="name">Per-network sensitivity</td><td class="st"><span class="tag ok">done</span></td><td>For each protected network, single indicators can be switched off and the alert threshold changed (e.g. a mesh network that changes channels often).</td></tr>
+  <tr><td class="id">F012</td><td class="name">Incident correlation</td><td class="st"><span class="tag ok">done</span></td><td>Groups related alerts (twin + deauth burst on the same network, close in time) into one incident.</td></tr>
+  <tr><td class="id">F042</td><td class="name">Capture quality panel</td><td class="st"><span class="tag ok">done</span></td><td>Shows channels heard, the share of each AP's expected beacons actually received, damaged frames and deauth counts, so "quiet" can be told apart from "not listening".</td></tr>
+  <tr><td class="id">F043</td><td class="name">Smart channel hopping</td><td class="st"><span class="tag ok">done</span></td><td>Dwells longer on the channels of protected networks so evidence about them arrives faster.</td></tr>
+</table>
+
+<h3>C. Saved baselines (protected networks)</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F014</td><td class="name">Saved network baselines</td><td class="st"><span class="tag ok">done</span></td><td>Saves what your networks look like (<span class="mono">data/monitored.json</span>) so later sessions score from the first second and catch a twin already running at start-up. Since 2.1 the file is signed, versioned and approval-gated.</td></tr>
+  <tr><td class="id">F015</td><td class="name">Protected networks page</td><td class="st"><span class="tag ok">done</span></td><td>One card per protected network: its APs, channels, security, signal, fingerprints, live status and risk trend.</td></tr>
+  <tr><td class="id">F016</td><td class="name">Baseline wizard</td><td class="st"><span class="tag ok">done</span></td><td>Pick networks heard in the session and learn them from the learning period or the whole session.</td></tr>
+  <tr><td class="id">F017</td><td class="name">Accept a change</td><td class="st"><span class="tag ok">done</span></td><td>Accept a new legitimate AP into a network's baseline (or remove one) with one click, applied to the running capture immediately.</td></tr>
+  <tr><td class="id">F018</td><td class="name">New-network inbox</td><td class="st"><span class="tag ok">done</span></td><td>Lists networks heard but not protected; approve, ignore or protect each.</td></tr>
+  <tr><td class="id">F019</td><td class="name">Allow-list editor</td><td class="st"><span class="tag ok">done</span></td><td>Trusted BSSIDs that are not treated as new when they appear; cloning one is still detected.</td></tr>
+  <tr><td class="id">F034</td><td class="name">Network health card</td><td class="st"><span class="tag ok">done</span></td><td>Expected APs heard now, missing ones, and unexpected ones using the network's name.</td></tr>
+  <tr><td class="id">F035</td><td class="name">Network risk score</td><td class="st"><span class="tag ok">done</span></td><td>The highest current risk among a network's APs, with a trend line.</td></tr>
+</table>
+
+<h3>D. Dashboard and analyst experience</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F020</td><td class="name">Incident story card</td><td class="st"><span class="tag ok">done</span></td><td>An incident told as a short timeline: when the twin appeared, what was seen, when it escalated.</td></tr>
+  <tr><td class="id">F021</td><td class="name">Sensor heartbeat</td><td class="st"><span class="tag ok">done</span></td><td>In live mode shows beacons per minute and warns when the adapter goes silent ("quiet may mean not listening, not safe").</td></tr>
+  <tr><td class="id">F022</td><td class="name">Customisable layout</td><td class="st"><span class="tag ok">done</span></td><td>Show, hide and reorder dashboard panels; remembered per browser.</td></tr>
+  <tr><td class="id">F023</td><td class="name">"Since you last looked"</td><td class="st"><span class="tag ok">done</span></td><td>Highlights alerts and changes that appeared since your last visit.</td></tr>
+  <tr><td class="id">F024</td><td class="name">Alert filters and sorting</td><td class="st"><span class="tag ok">done</span></td><td>Filter alerts by level, triage state and network; sort by risk or time.</td></tr>
+  <tr><td class="id">F025</td><td class="name">Bulk triage</td><td class="st"><span class="tag ok">done</span></td><td>Mark many alerts at once (e.g. all false positives of one network).</td></tr>
+  <tr><td class="id">F026</td><td class="name">Snooze and mute rules</td><td class="st"><span class="tag ok">done</span></td><td>Silence notifications for an AP or network for a time, without hiding the evidence.</td></tr>
+  <tr><td class="id">F027</td><td class="name">Triage history</td><td class="st"><span class="tag ok">done</span></td><td>Who changed an alert's status, when, and with which note.</td></tr>
+  <tr><td class="id">F028</td><td class="name">Beacon difference viewer</td><td class="st"><span class="tag ok">done</span></td><td>Explains a fingerprint mismatch element by element: which information elements, rates or capabilities differ from the real AP.</td></tr>
+  <tr><td class="id">F029</td><td class="name">Vendor names</td><td class="st"><span class="tag ok">done</span></td><td>Shows the manufacturer for a BSSID's vendor prefix and marks randomised MACs.</td></tr>
+  <tr><td class="id">F030</td><td class="name">Signal and uptime charts</td><td class="st"><span class="tag ok">done</span></td><td>Per-AP charts of signal, uptime (TSF) and beacons per second over time.</td></tr>
+  <tr><td class="id">F031</td><td class="name">What-if weights</td><td class="st"><span class="tag ok">done</span></td><td>Re-scores the session with changed weights or thresholds to show how verdicts would change, without touching the live configuration.</td></tr>
+  <tr><td class="id">F032</td><td class="name">Evidence pcap download</td><td class="st"><span class="tag ok">done</span></td><td>Downloads just the frames of one suspicious AP as a pcap for Wireshark or a report.</td></tr>
+  <tr><td class="id">F033</td><td class="name">Related access points</td><td class="st"><span class="tag ok">done</span></td><td>Lists APs that may belong to the same device or attack as the selected one, with the reason: a consecutive address, the same address as a second network of one device, the same beacon structure under another name, or the same channel and signal.</td></tr>
+  <tr><td class="id">F036</td><td class="name">Clock time and time ranges</td><td class="st"><span class="tag ok">done</span></td><td>Switch between capture-relative time ("t+200s") and wall-clock time; drag on the timeline to zoom into a time range.</td></tr>
+  <tr><td class="id">F037</td><td class="name">Timeline annotations</td><td class="st"><span class="tag ok">done</span></td><td>Analyst notes pinned to a moment on the timeline ("switched the twin on here"); capture pauses are recorded automatically.</td></tr>
+  <tr><td class="id">F038</td><td class="name">Large-site performance</td><td class="st"><span class="tag ok">done</span></td><td>Bounded queries and folding of many quiet APs into one line keep the dashboard fast with hundreds of APs.</td></tr>
+  <tr><td class="id">F039</td><td class="name">Table export and columns</td><td class="st"><span class="tag ok">done</span></td><td>Choose table columns and export tables as CSV.</td></tr>
+  <tr><td class="id">F076</td><td class="name">Guided tour</td><td class="st"><span class="tag ok">done</span></td><td>A short first-visit walkthrough of the dashboard.</td></tr>
+  <tr><td class="id">F077</td><td class="name">Glossary tooltips</td><td class="st"><span class="tag ok">done</span></td><td>Explanations of terms such as BSSID, TSF or OUI on hover.</td></tr>
+  <tr><td class="id">F078</td><td class="name">Command palette</td><td class="st"><span class="tag ok">done</span></td><td>Ctrl/⌘ K to jump to any page, AP or action by typing.</td></tr>
+  <tr><td class="id">F079</td><td class="name">Accessibility pass</td><td class="st"><span class="tag ok">done</span></td><td>Keyboard navigation, screen-reader labels and focus handling across the dashboard.</td></tr>
+  <tr><td class="id">F080</td><td class="name">Colour-blind and high-contrast modes</td><td class="st"><span class="tag ok">done</span></td><td>Alternative palettes so risk levels are distinguishable for everyone.</td></tr>
+  <tr><td class="id">F081</td><td class="name">Install as an app</td><td class="st"><span class="tag ok">done</span></td><td>The dashboard can be installed as a desktop/phone app (web manifest), deliberately without offline caching.</td></tr>
+  <tr><td class="id">F082</td><td class="name">Languages</td><td class="st"><span class="tag hw">done*</span></td><td>Translation framework with English, plus Hindi and Telugu drafts that need a native speaker's review.</td></tr>
+  <tr><td class="id">F083</td><td class="name">Shareable views</td><td class="st"><span class="tag ok">done</span></td><td>The current page, selection and filters are kept in the link so a view can be shared.</td></tr>
+  <tr><td class="id">F089</td><td class="name">Demo button</td><td class="st"><span class="tag ok">done</span></td><td>Replays the bundled synthetic capture as a new session, for demonstrations without hardware.</td></tr>
+  <tr><td class="id">F090</td><td class="name">Presentation mode</td><td class="st"><span class="tag ok">done</span></td><td>A large, simplified view for projectors and exhibitions.</td></tr>
+  <tr><td class="id">F091</td><td class="name">Dashboard screenshot</td><td class="st"><span class="tag ok">done</span></td><td>A tool that renders the dashboard to an image for the report.</td></tr>
+</table>
+
+<h3>E. Notifications and integrations</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F013</td><td class="name">Alert throttling and re-alerting</td><td class="st"><span class="tag ok">done</span></td><td>Avoids repeated messages for the same alert, but sends a new one when it escalates (MEDIUM → HIGH) and an optional reminder every N minutes while it is still active.</td></tr>
+  <tr><td class="id">F055</td><td class="name">Desktop notifications</td><td class="st"><span class="tag ok">done</span></td><td>Browser notifications for new or escalated alerts.</td></tr>
+  <tr><td class="id">F056</td><td class="name">Webhooks</td><td class="st"><span class="tag hw">done*</span></td><td>JSON (or Slack-style) messages to any URL; tested against a local receiver.</td></tr>
+  <tr><td class="id">F057</td><td class="name">Phone push</td><td class="st"><span class="tag hw">done*</span></td><td>ntfy and Telegram formats; real delivery needs your topic or bot token.</td></tr>
+  <tr><td class="id">F058</td><td class="name">E-mail alerts</td><td class="st"><span class="tag hw">done*</span></td><td>SMTP e-mail; tested with a fake mail server, real delivery needs your account.</td></tr>
+  <tr><td class="id">F059</td><td class="name">SIEM and syslog export</td><td class="st"><span class="tag ok">done</span></td><td>Alerts as syslog/CEF lines for security monitoring systems.</td></tr>
+  <tr><td class="id">F060</td><td class="name">Grafana metrics</td><td class="st"><span class="tag ok">done</span></td><td>A Prometheus <span class="mono">/metrics</span> endpoint (frames, APs, alerts by level) for Grafana dashboards.</td></tr>
+  <tr><td class="id">F061</td><td class="name">Documented API with keys</td><td class="st"><span class="tag ok">done</span></td><td>An OpenAPI description and API keys (read or write scope) for scripts and tools.</td></tr>
+</table>
+
+<h3>F. Accounts and access control</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F062</td><td class="name">Sign-in page</td><td class="st"><span class="tag ok">done</span></td><td>A proper login page with clear errors; 5 failed sign-ins within 10 minutes lock that name or address for 10 minutes.</td></tr>
+  <tr><td class="id">F063</td><td class="name">Read-only viewer link</td><td class="st"><span class="tag ok">done</span></td><td>A revocable link that shows the dashboard without any write access (e.g. for a projector or a guide).</td></tr>
+  <tr><td class="id">F064</td><td class="name">HTTPS mode</td><td class="st"><span class="tag ok">done</span></td><td>Serves the dashboard over TLS with a self-signed certificate (fingerprint printed) or your own.</td></tr>
+  <tr><td class="id">F065</td><td class="name">Analyst accounts and roles</td><td class="st"><span class="tag ok">done</span></td><td>Admin, analyst and viewer roles with server-enforced permissions; the first account turns sign-in on.</td></tr>
+  <tr><td class="id">F066</td><td class="name">Two-factor sign-in</td><td class="st"><span class="tag ok">done</span></td><td>Optional TOTP codes from an authenticator app.</td></tr>
+  <tr><td class="id">F067</td><td class="name">Session management</td><td class="st"><span class="tag ok">done</span></td><td>See and sign out your signed-in devices; sessions expire.</td></tr>
+</table>
+
+<h3>G. Lab, labelling and evaluation</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F040</td><td class="name">Sessions page</td><td class="st"><span class="tag ok">done</span></td><td>Every replay or live run is a session (own folder, database, pcap, labels); browse, compare, delete.</td></tr>
+  <tr><td class="id">F046</td><td class="name">Labelling page</td><td class="st"><span class="tag ok">done</span></td><td>Mark which APs in a session were your lab twins and when the attack started.</td></tr>
+  <tr><td class="id">F047</td><td class="name">Evaluation page</td><td class="st"><span class="tag ok">done</span></td><td>Runs the evaluation on labelled sessions from the dashboard.</td></tr>
+  <tr><td class="id">F048</td><td class="name">Confidence intervals and test splits</td><td class="st"><span class="tag ok">done</span></td><td>Wilson and bootstrap intervals, and a tune/test split so results are not measured on tuning data.</td></tr>
+  <tr><td class="id">F049</td><td class="name">ROC and precision-recall curves</td><td class="st"><span class="tag ok">done</span></td><td>Curves over all thresholds for GhostAP's score.</td></tr>
+  <tr><td class="id">F050</td><td class="name">Kismet as a second baseline</td><td class="st"><span class="tag ok">done</span></td><td>Reads Kismet's alert log of the same capture and scores Kismet with the same metrics; confirmed with real Kismet logs.</td></tr>
+  <tr><td class="id">F051</td><td class="name">Scenario builder</td><td class="st"><span class="tag ok">done</span></td><td>Builds your own synthetic labelled capture (e.g. open twin, same vendor).</td></tr>
+  <tr><td class="id">F052</td><td class="name">Session incident report</td><td class="st"><span class="tag ok">done</span></td><td>A printable HTML report of a session's alerts, incidents and evidence.</td></tr>
+  <tr><td class="id">F053</td><td class="name">Keep report numbers in sync</td><td class="st"><span class="tag ok">done</span></td><td>A checker (run in CI) that every number quoted in the documents matches the latest results.</td></tr>
+  <tr><td class="id">F054</td><td class="name">Session bundle</td><td class="st"><span class="tag ok">done</span></td><td>Exports a session as one archive with a SHA-256 manifest; imports are checked.</td></tr>
+  <tr><td class="id">F084</td><td class="name">Learned weights</td><td class="st"><span class="tag hw">done*</span></td><td>Fits indicator weights by logistic regression on a tune split and scores them on a test split; meaningful only with enough real captures.</td></tr>
+  <tr><td class="id">F085</td><td class="name">Anomaly model</td><td class="st"><span class="tag hw">done*</span></td><td>A statistical anomaly score as a side-score; synthetic until enough real data exists.</td></tr>
+  <tr><td class="id">F088</td><td class="name">Labelling assistant</td><td class="st"><span class="tag ok">done</span></td><td>Suggests likely twins and attack start times on the labelling page.</td></tr>
+</table>
+
+<h3>H. Operations and deployment</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F068</td><td class="name">System health page</td><td class="st"><span class="tag ok">done</span></td><td>Server uptime, capture state, database size, disk space, retention, damaged frames, channels heard, sensor capabilities.</td></tr>
+  <tr><td class="id">F069</td><td class="name">Audit log</td><td class="st"><span class="tag ok">done</span></td><td>Every change (triage, baseline edits and approvals, settings) with who, when and what.</td></tr>
+  <tr><td class="id">F070</td><td class="name">Data retention</td><td class="st"><span class="tag ok">done</span></td><td>Optionally deletes old raw frames; caps the detector's memory to recent history without changing scores.</td></tr>
+  <tr><td class="id">F071</td><td class="name">Run as a service</td><td class="st"><span class="tag hw">done*</span></td><td>A systemd unit and install script for an always-on sensor.</td></tr>
+  <tr><td class="id">F072</td><td class="name">Settings validation</td><td class="st"><span class="tag ok">done</span></td><td>Every configuration value is checked at start-up with a clear error message.</td></tr>
+  <tr><td class="id">F073</td><td class="name">Docker image</td><td class="st"><span class="tag ok">done</span></td><td>A hardened container (read-only, no capabilities) for offline analysis and demos; built and health-checked in CI.</td></tr>
+  <tr><td class="id">F074</td><td class="name">Log files</td><td class="st"><span class="tag ok">done</span></td><td>A rotating log file next to the console output.</td></tr>
+  <tr><td class="id">F075</td><td class="name">Settings page</td><td class="st"><span class="tag ok">done</span></td><td>Admins change thresholds, weights and more from the dashboard (saved as an overlay, never editing config.yaml).</td></tr>
+</table>
+
+<h3>I. Opt-in AI</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F086</td><td class="name">AI alert explainer</td><td class="st"><span class="tag hw">done*</span></td><td>Explains an alert in plain language through the Claude API. Off by default; network names and addresses are hidden from the model.</td></tr>
+  <tr><td class="id">F087</td><td class="name">Ask GhostAP</td><td class="st"><span class="tag hw">done*</span></td><td>Ask questions about the current session in natural language; same opt-in and redaction.</td></tr>
+</table>
+
+<h3>J. Capture control and several sensors</h3>
+<table>
+  <tr><th>ID</th><th>Feature</th><th>Status</th><th>Explanation</th></tr>
+  <tr><td class="id">F041</td><td class="name">Capture control panel</td><td class="st"><span class="tag hw">done*</span></td><td>Pause/resume a live capture and change the channel plan from the dashboard; pauses are written to the timeline.</td></tr>
+  <tr><td class="id">F044</td><td class="name">Several sensors</td><td class="st"><span class="tag hw">done*</span></td><td>Sensor machines report their observations to a central GhostAP with an API key; tested between two instances on one machine.</td></tr>
+  <tr><td class="id">F045</td><td class="name">Rough location</td><td class="st"><span class="tag hw">done*</span></td><td>Estimates a coarse position of an AP from the signal strength seen by three or more sensors (trilateration); real accuracy unknown until measured.</td></tr>
+</table>
+
+<!-- ====================================================================== 9 -->
+<h2 class="pb">9. Features added in releases 2.1 and 2.2</h2>
+<p>These were built after the first live test on real hardware, most of them in response to what real radio
+traffic revealed.</p>
+<table>
+  <tr><th>Feature</th><th>Explanation</th></tr>
+  <tr><td class="name">Signed, versioned saved baselines</td><td>The saved baseline decides what is "normal", so changing it is a security decision. The file carries a SHA-256 and an HMAC whose key lives outside the data folder; a file edited by hand is refused until reviewed (<span class="mono">python -m ghostap.monitored trust --yes</span>). Every change is a numbered version with history, diff and restore.</td></tr>
+  <tr><td class="name">Approval workflow</td><td>An analyst's baseline change waits for an admin; with two or more admins a second admin must approve (two-person rule). Shown on the Protected networks page with Approve / Reject.</td></tr>
+  <tr><td class="name">Contamination checks while learning</td><td>If the learning window shows signs of an attack (KARMA, look-alike names, tool fingerprint, two transmitters, open and protected APs under one name, a freshly booted AP beside long-running ones), the new baseline waits for explicit approval, so an attack running during learning is not silently learned as normal.</td></tr>
+  <tr><td class="name">Sensor capability intelligence</td><td>Reads the adapter's capabilities (bands, Wi-Fi generations, antennas, ciphers, concurrent interfaces) and lists what it cannot observe, e.g. "6 GHz networks are not heard". A blind spot is never presented as a quiet airspace.</td></tr>
+  <tr><td class="name">Clock drift measured between APs</td><td>Live testing showed the sensor's own clock is adjusted by time-sync services (about 250 ppm in a VM), which made every AP look like "different hardware". Drift is now measured against other APs' clocks, which cancels the sensor's clock.</td></tr>
+  <tr><td class="name">On-channel signal comparison</td><td>A hopping sensor hears a strong nearby AP faintly on far channels; signal levels are now compared only on frames heard on or next to the AP's own channel.</td></tr>
+  <tr><td class="name">One-radio channel flips</td><td>An AP whose frames claim two channels but continue one sequence counter is one radio (automatic channel selection), not a clone.</td></tr>
+  <tr><td class="name">Deauth reason codes</td><td>Deauth alerts name the most common reason code; "station is leaving" frames count one third; login-failure storms (reason 15) are explained as devices trying a saved password on a same-name network.</td></tr>
+  <tr><td class="name">Persistent capture socket</td><td>One capture socket per live run instead of one per second: no kernel log spam and no receive gaps.</td></tr>
+  <tr><td class="name">Files back to the user after sudo</td><td>Files created by a <span class="mono">sudo</span> live capture are handed back to the user who ran sudo, so the non-root labelling and evaluation steps work.</td></tr>
+  <tr><td class="name">Labelling runs without a twin</td><td><span class="mono">label_capture.py --no-twin</span> labels a false-positive measurement run.</td></tr>
+  <tr><td class="name">Kismet replay handling</td><td>Recognises Kismet logs of replayed captures, whose alert times are processing times, and leaves Kismet's latency out instead of reporting nonsense.</td></tr>
+</table>
+
+<!-- ====================================================================== 10 -->
+<h2>10. Security and privacy by design</h2>
+<div class="two">
+<div>
+<h3>Security of the dashboard</h3>
+<ul>
+  <li>Everything received over the air (network names, reasons) is HTML-escaped before display.</li>
+  <li>Strict Content Security Policy: no inline scripts, all JavaScript served locally (works offline).</li>
+  <li>Bound to localhost by default, with a Host-header check against DNS rebinding.</li>
+  <li>Every write request must be JSON and same-origin (cross-site request forgery defence); 64 KB request limit.</li>
+  <li>Roles enforced on the server; admin-only endpoints listed centrally.</li>
+  <li>Token login when exposed to the network; optional HTTPS, two-factor sign-in.</li>
+  <li>Signed saved baselines with approval and a full audit log.</li>
+</ul>
+</div>
+<div>
+<h3>Privacy and safety</h3>
+<ul>
+  <li>Strictly passive: no transmission, injection, deauthentication or decryption.</li>
+  <li>No client device addresses are stored, not even for deauthentication frames.</li>
+  <li>Captures and databases stay local (never committed to git).</li>
+  <li>Notifications, AI help and sensor reporting are off by default; secrets come only from environment variables.</li>
+  <li>The opt-in AI feature hides network names and addresses from the model.</li>
+  <li>Damaged frames are dropped, never "repaired" into fake evidence.</li>
+</ul>
+</div>
+</div>
+
+<!-- ====================================================================== 11 -->
+<h2>11. How well it works</h2>
+<h3>Synthetic evaluation set (author-designed)</h3>
+<p>11 captures, 43 access points, 6 evil twins of increasing difficulty and 5 benign-change scenarios. These
+scenarios were designed by the authors and are not real-world measurements.</p>
+<table>
+  <tr><th>Detector</th><th class="num">TP</th><th class="num">FP</th><th class="num">TN</th><th class="num">FN</th><th class="num">Precision</th><th class="num">Recall</th><th class="num">F1</th><th class="num">FPR</th><th class="num">Latency mean / max</th></tr>
+  <tr><td>GhostAP</td><td class="num">5</td><td class="num">0</td><td class="num">37</td><td class="num">1</td><td class="num">1.00</td><td class="num">0.83</td><td class="num">0.91</td><td class="num">0.00</td><td class="num">16.0 s / 20.1 s</td></tr>
+  <tr><td>Duplicate-SSID baseline</td><td class="num">6</td><td class="num">27</td><td class="num">10</td><td class="num">0</td><td class="num">0.18</td><td class="num">1.00</td><td class="num">0.31</td><td class="num">0.73</td><td class="num">0 s</td></tr>
+</table>
+<h3>Live captures on real hardware (14 November 2026)</h3>
+<p>Three runs on Kali Linux (21–31 minutes each), the owner's router and phone hotspot, 141 legitimate
+neighbouring access points labelled legitimate:</p>
+<table>
+  <tr><th>Detector</th><th class="num">Twins caught</th><th class="num">False alarms</th><th class="num">Precision</th><th class="num">Recall</th><th class="num">FPR</th><th class="num">Latency mean / max</th></tr>
+  <tr><td>GhostAP</td><td class="num">3 / 3</td><td class="num">0</td><td class="num">1.00</td><td class="num">1.00</td><td class="num">0.00</td><td class="num">18.4 s / 22.2 s</td></tr>
+  <tr><td>Kismet 2023-07 (default configuration)</td><td class="num">2 / 3</td><td class="num">0</td><td class="num">1.00</td><td class="num">0.67</td><td class="num">0.00</td><td class="num">not comparable (replay)</td></tr>
+  <tr><td>Duplicate-SSID baseline</td><td class="num">3 / 3</td><td class="num">2</td><td class="num">0.60</td><td class="num">1.00</td><td class="num">0.01</td><td class="num">0 s</td></tr>
+</table>
+<div class="box warn">Three twins from one phone in one location is enough to show GhostAP works on real radio traffic
+and to find real bugs (four were found and fixed), not enough to estimate its accuracy in general. The
+configured alert threshold (30) was not tuned on these captures.</div>
+<h3>Performance (live, measured)</h3>
+<p>About 15 % of one CPU core and 113 MB of memory at about 32 stored frames per second from about 45 networks;
+API responses in 1–3 ms; no damaged frames in the last run. A multi-hour soak test is in progress.</p>
+
+<!-- ====================================================================== 12 -->
+<h2>12. Limitations and what comes next</h2>
+<h3>Known limitations</h3>
+<ul>
+  <li><b>A twin that copies everything</b>, including the beacon structure, the security and the channel (synthetic
+    scenario s11), is missed: beacons alone cannot separate it from a new legitimate AP.</li>
+  <li><b>Same-security twins have a thin margin</b> (live scores 31–38 against a threshold of 30).</li>
+  <li><b>A twin running during the learning period</b> is learned as normal, unless a signed saved baseline is used;
+    the contamination checks now flag the common cases.</li>
+  <li><b>Hardware:</b> one sensor, 2.4 and 5 GHz only (no 6 GHz), one antenna (no direction finding).</li>
+  <li><b>Weights are expert judgement</b>, not yet learned from enough real data.</li>
+</ul>
+<h3>Roadmap (GhostAP 3.0 plan, approved)</h3>
+<table>
+  <tr><th>Release</th><th>Content</th></tr>
+  <tr><td>2.1 / 2.2</td><td>Live-found fixes, signed baselines, sensor capabilities (done); multi-hour soak, a 5 GHz twin test, persisted incidents, evidence records and a hash-chained audit log.</td></tr>
+  <tr><td>3.0 Airspace Assurance</td><td>A small privileged radio service so the web app no longer runs as root; a passive device identity card (WPS identity fields); a check of the sister APs a real AP declares in its own beacons; sensor integrity and coverage disclosure; an isolated virtual-radio lab (mac80211_hwsim + hostapd); an inventory of what should be on the air.</td></tr>
+  <tr><td>3.1 / 3.2</td><td>Authorised, approval-gated active checks (a canary probe that exposes KARMA, a test client pinned to known APs) and fixes applied to equipment you own, confirmed on the air.</td></tr>
+  <tr><td>4.x</td><td>Several sensors with a shared clock taken from the APs themselves, behavioural analytics once enough real data exists, 6 GHz with new hardware.</td></tr>
+</table>
+<p class="small">Sources: the GhostAP repository (README, docs/ROADMAP.md, docs/REPORT.md, docs/testing/live-kali-validation.md,
+docs/PLAN_3.0.md, source code and tests). Synthetic results from <span class="mono">results/</span>; live results from
+the owner's own lab captures, which stay local.</p>
+
+</body>
+</html>
