@@ -717,3 +717,8 @@ svg.radar { width: 100%; height: auto; display: block; touch-action: manipulatio
   .rdot { transition: none; }
   .rdot .pulse, .dot.live { animation: none; }
 }
+.radar-msg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%; text-align: center;
+  padding: 10px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); font-size: 13.5px; }
+.radar-filters .radar-live { margin-left: auto; }
+.grid.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 760px) { .grid.two { grid-template-columns: minmax(0, 1fr); } }

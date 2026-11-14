@@ -44,7 +44,7 @@
         ${tile("Deauth frames", Number(q.deauth_events || 0).toLocaleString(), "deauthentication / disassociation")}
       </section>
       ${silent ? '<div class="banner error" style="white-space:normal">The adapter has been silent for a while. A quiet dashboard may mean “not listening”, not “safe”. Check monitor mode and the antenna.</div>' : ""}
-      <section class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+      <section class="grid two">
         <div class="card"><div class="card-head"><h2>Channels heard <span class="muted">last minute of capture</span></h2></div>
           ${q.hopping ? `<p class="hint">${esc(q.hopping)}</p>` : ""}
           ${q.channels.length ? `<ul class="list-plain">${q.channels.map((c) => `<li><span class="mono" style="min-width:40px">ch ${esc(c.channel)}</span>
@@ -87,7 +87,7 @@
         <p>${cap.paused ? `<b>Paused</b> since ${new Date(cap.paused_since * 1000).toLocaleTimeString()} (${cap.dropped_while_paused} frames ignored). Nothing is scored while paused; the timeline shows the gap.` : "Capturing."} ${esc(cap.hopping || "")}</p>
         <form class="key-form" data-hop-form><label class="sr-only" for="hop-ch">Channels</label><input class="input" id="hop-ch" placeholder="1,6,11 · 1-13 · 2.4 · 5 · all · or one channel to park" value="${esc((cap.channels || []).join(","))}">
         <label class="sr-only" for="hop-dw">Seconds per channel</label><input class="input" id="hop-dw" type="number" min="0.05" max="10" step="0.05" value="${cap.dwell || 0.25}">
-        <button class="btn" type="submit">Apply</button></form></section>` : "") + `<section class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+        <button class="btn" type="submit">Apply</button></form></section>` : "") + `<section class="grid two">
       <div class="card"><div class="card-head"><h2>Notifications <span class="muted">${n.enabled ? (n.running ? "on" : "on, no channel running") : "off"}</span></h2>
           ${n.channels.length ? '<button class="btn small" data-notify-test>Send a test message</button>' : ""}</div>
         ${notifHidden ? '<p class="hint">Notification settings are visible to analysts and admins.</p>' : n.enabled ? "" : '<p class="hint">Switched off. Set <span class="mono">notifications.enabled: true</span> and add a webhook, ntfy topic, e-mail or syslog target in config.yaml (examples there). Secrets go in environment variables.</p>'}

@@ -30,7 +30,7 @@
       ${!me.accounts ? `<section class="card"><h2>Accounts are off</h2>
         <p>On localhost nobody signs in; on the network the start-up link is the only key. Create the first account (an admin) to give each person their own sign-in, role and two-factor code. After that everyone signs in, also on localhost.</p>
         <p class="muted small">In a terminal: <span class="mono">python -m ghostap.users add &lt;name&gt; --role admin</span>, or below.</p></section>` : ""}
-      ${isUser ? `<section class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+      ${isUser ? `<section class="grid two">
         <div class="card"><h2>Password</h2>
           <form class="stack-form" data-form="password" autocomplete="on">
             <input type="text" name="username" autocomplete="username" value="${esc(me.name)}" hidden>

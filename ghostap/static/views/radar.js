@@ -9,7 +9,7 @@
   const { esc, get, lvl, ssidLabel, fmt } = G;
   const SIZE = 600, C = SIZE / 2, R_MIN = 26, R_MAX = 262;
   const RSSI_NEAR = -30, RSSI_FAR = -95;
-  let root = null, timer = null, paused = false, data = null, selected = null, lastOk = 0;
+  let root = null, timer = null, paused = false, data = null, selected = null, lastOk = 0, lastErr = null;
   const filt = { q: "", band: "all", suspicious: false, min: -95 };
   const dots = new Map();                      // key -> <g>, kept so dots glide between updates
 
@@ -54,17 +54,16 @@
         <text class="ring-label" x="${C + 4}" y="${C - rr + 13}">${r} dBm</text>`;
     }).join("");
     root.innerHTML = `<div class="page-head"><div><h1>Live radar</h1>
-        <p>Every access point heard in the last minute, around this sensor. <b>Closer to the centre = stronger signal.</b>
-        Direction is not measured (one antenna cannot tell where a signal comes from): each network gets its own slice, so a
-        copy of a network lands next to it.</p></div>
-        <div class="row-actions"><span class="radar-live" id="radar-live" aria-live="polite"></span>
-        <button class="btn small" id="radar-pause" aria-pressed="false">Pause</button></div></div>
+        <p>Access points heard in the last minute. <b>Closer to the centre = stronger signal.</b>
+        <span class="muted">Direction is not measured (one antenna); each network keeps its own slice, so a copy lands beside it.</span></p></div></div>
       <div class="radar-filters card">
         <label class="sr-only" for="radar-q">Search</label><input class="input" id="radar-q" type="search" placeholder="Search name, address, vendor…">
-        <label class="sr-only" for="radar-band">Band</label><select class="input" id="radar-band"><option value="all">2.4 + 5 GHz</option><option value="2.4">2.4 GHz</option><option value="5">5 GHz</option><option value="6">6 GHz</option></select>
+        <label class="sr-only" for="radar-band">Band</label><select class="input" id="radar-band"><option value="all">All bands</option></select>
         <label class="check"><input type="checkbox" id="radar-susp"> Only suspicious</label>
         <label class="radar-min">Hide weaker than <output id="radar-min-out">−95</output> dBm
           <input type="range" id="radar-min" min="-95" max="-40" step="5" value="-95"></label>
+        <span class="radar-live" id="radar-live" aria-live="polite"></span>
+        <button class="btn small" id="radar-pause" aria-pressed="false">Pause</button>
       </div>
       <div class="radar-grid">
         <div class="card radar-card">
@@ -80,6 +79,7 @@
               <g class="me"><circle cx="${C}" cy="${C}" r="7"/><text x="${C}" y="${C + 22}" text-anchor="middle">you</text></g>
             </svg>
             <div class="radar-tip" id="radar-tip" hidden></div>
+            <div class="radar-msg" id="radar-msg" hidden></div>
           </div>
           <ul class="radar-legend">
             <li><svg viewBox="-8 -8 16 16"><circle class="mark lv-LOW" r="5"/></svg> no alert</li>
@@ -134,12 +134,36 @@
     });
     for (const [k, g] of dots) if (!keep.has(k)) { g.remove(); dots.delete(k); }
     root.querySelector("#radar-count").textContent = `${shown.length} of ${data.aps.length}`;
+    bands();
+    message(!data.aps.length ? emptyText() : !shown.length ? "No access point matches these filters." : null);
     root.querySelector("#radar-rows").innerHTML = data.aps.slice().sort((a, b) => (b.rssi ?? -999) - (a.rssi ?? -999)).filter(visible).map((a) =>
       `<tr data-key="${esc(keyOf(a))}" tabindex="0" class="${selected === keyOf(a) ? "selected" : ""}"><td>${esc(ssidLabel(a.ssid))}${a.new ? ' <span class="tag new">new</span>' : ""}</td>
         <td class="mono">${esc(a.bssid)}<span class="vendor">${esc(a.vendor || "")}</span></td><td class="num">${a.rssi == null ? "–" : fmt(a.rssi, 0) + " dBm"}</td>
         <td class="num">${esc(a.channel ?? "–")}</td><td>${level(a) === "LOW" ? '<span class="muted">–</span>' : lvl(level(a))}</td></tr>`).join("") ||
       '<tr><td colspan="5" class="empty">Nothing heard in the last minute matches these filters.</td></tr>';
     side();
+  }
+
+  /** Why the radar is empty, in plain words (shown over the radar). */
+  function emptyText() {
+    const s = G.state.summary || {}, st = s.status || {};
+    if (!s.aps) return st.mode === "live" ? "Waiting for the first beacons. Is the adapter in monitor mode? See System." : "Nothing captured yet.";
+    return "Nothing heard in the last minute" + (st.state === "running" ? ". Access points appear as soon as their beacons arrive." : ".");
+  }
+  function message(text) {
+    const el = root.querySelector("#radar-msg");
+    el.hidden = !text;
+    el.textContent = text || "";
+  }
+  /** Band choices: only the bands actually heard (plus "all"). */
+  function bands() {
+    const sel = root.querySelector("#radar-band");
+    const have = [...new Set(data.aps.map((a) => a.band))].sort();
+    const want = ["all", ...have].join(",");
+    if (sel.dataset.have === want) return;
+    sel.dataset.have = want;
+    sel.innerHTML = `<option value="all">All bands</option>` + have.map((b) => `<option value="${esc(b)}" ${filt.band === b ? "selected" : ""}>${esc(b)} GHz</option>`).join("");
+    if (filt.band !== "all" && !have.includes(filt.band)) filt.band = "all";
   }
 
   function side() {
@@ -186,8 +210,18 @@
       try {
         data = await get("/api/live?seconds=60");
         lastOk = Date.now();
+        lastErr = null;
         update();
-      } catch (e) { /* keep the last picture; the status line says it is stale */ }
+      } catch (e) {
+        // keep the last picture, but say why it is not updating
+        lastErr = e.status === 404 ? "This GhostAP server was started before the radar existed: restart GhostAP, then reload this page."
+          : e.status === 401 ? "You are signed out: reload the page and sign in."
+          : e.status === 403 ? "Your account may not view this."
+          : e.status ? "Radar data failed (HTTP " + e.status + ")."
+          : "The GhostAP server is not reachable. Is it still running?";
+        if (!root) return;
+        message(lastErr);
+      }
     }
     status();
     timer = setTimeout(poll, 2000);
@@ -200,9 +234,10 @@
     const live = st.state === "running";
     const age = lastOk ? Math.round((Date.now() - lastOk) / 1000) : null;
     el.innerHTML = paused ? '<i class="dot"></i> paused'
+      : lastErr ? '<i class="dot error"></i> not updating'
       : age != null && age > 10 ? `<i class="dot error"></i> no update for ${age} s`
       : live ? '<i class="dot running"></i> live'
-      : '<i class="dot"></i> capture finished: showing its last minute';
+      : '<i class="dot"></i> finished: last minute of the capture';
     root.querySelector(".radar").classList.toggle("is-live", live && !paused);
   }
 

@@ -22,10 +22,10 @@
     const viewing = G.state.session === s.id || (!G.state.session && s.current);
     const name = renaming === s.id
       ? `<form class="row-actions" data-rename-form="${esc(s.id)}"><input class="input" id="rename-${esc(s.id)}" value="${esc(s.name)}" maxlength="120" aria-label="New name"><button class="btn small primary" type="submit">Save</button><button class="btn small" type="button" data-cancel>Cancel</button></form>`
-      : `<b>${esc(s.name)}</b>${s.current ? ' <span class="tag new">running now</span>' : ""}${viewing && !s.current ? ' <span class="tag">viewing</span>' : ""}`;
+      : `<b>${esc(s.name)}</b>${s.current ? (((G.state.summary || {}).status || {}).state === "running" ? ' <span class="tag new">running now</span>' : ' <span class="tag">this server</span>') : ""}${viewing && !s.current ? ' <span class="tag">viewing</span>' : ""}`;
     const del = confirming === s.id
       ? `<span class="confirm">Delete this session and its data for good? <button class="btn small danger primary" data-delete="${esc(s.id)}">Delete</button><button class="btn small" data-cancel>Keep</button></span>`
-      : `<button class="btn small" data-ask-delete="${esc(s.id)}" ${s.current ? "disabled title=\"The running session cannot be deleted\"" : ""}>Delete</button>`;
+      : `<button class="btn small" data-ask-delete="${esc(s.id)}" ${s.current ? "disabled title=\"The session this server writes to cannot be deleted\"" : ""}>Delete</button>`;
     return `<tr>
       <td><input type="checkbox" data-compare="${esc(s.id)}" ${compare.has(s.id) ? "checked" : ""} aria-label="Compare ${esc(s.name)}"></td>
       <td>${name}<div class="meta-line"><span>${esc(s.mode || "")}</span><span class="mono">${esc(s.source || "")}</span></div></td>

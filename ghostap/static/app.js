@@ -310,8 +310,12 @@
     $("help-baseline").textContent = Math.round(s.baseline_seconds / 60);
     $("help-med").textContent = s.thresholds.medium;
     $("help-high").textContent = s.thresholds.high;
-    // HIGH-alert count first, so it shows in the tab; then the page you are on
-    document.title = (s.alerts.HIGH ? `(${s.alerts.HIGH}) ` : "") +
+    setTitle();
+  }
+  /** Tab title: HIGH-alert count first (so it shows in a narrow tab), then the page you are on. */
+  function setTitle() {
+    const high = state.summary && state.summary.alerts ? state.summary.alerts.HIGH : 0;
+    document.title = (high ? `(${high}) ` : "") +
       (currentView !== "dashboard" && views[currentView] ? views[currentView].title + " · GhostAP" : "GhostAP Dashboard");
   }
 
@@ -1391,6 +1395,11 @@
         try { state.incidents = await get("/api/incidents"); } catch (e) { state.incidents = []; }
         await loadNotes();
         if (state.seen === undefined) initSeen(ghost);
+        else if (!document.hidden && currentView === "dashboard") {   // arrived while you watched: the banner showed it
+          const before = new Map((state.ghost || []).map((a) => [a.id, a.level]));
+          const now = ghost.filter((a) => before.get(a.id) !== a.level);     // new, or escalated, just now
+          if (now.length) { now.forEach((a) => { state.seen.alerts[a.id] = a.level; }); store.set(seenKey(), JSON.stringify(state.seen)); }
+        }
         notify(ghost);
         state.ghost = ghost; state.base = base; state.networks = networks; state.events = events; state.aps = aps; state.series = series;
         if (changed("side", [ghost, base, networks, state.tab])) renderSide();
@@ -1519,8 +1528,8 @@
     if (name !== "dashboard") {
       root.innerHTML = "";
       views[name].show(root);
-      document.title = views[name].title + " · GhostAP";
     }
+    setTitle();
     renderNav();
     renderSessionBanner();
   }

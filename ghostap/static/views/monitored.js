@@ -12,7 +12,7 @@
       data = await get("/api/monitored");
       render();
     } catch (e) {
-      root.innerHTML = `<div class="card empty">Could not load monitored networks (${esc(e.message)}).</div>`;
+      root.innerHTML = `<div class="card empty">Could not load protected networks (${esc(e.message)}).</div>`;
     }
   }
 
@@ -88,7 +88,7 @@
     const nets = data.networks, inbox = data.inbox.filter((i) => showIgnored || i.decision !== "ignored");
     const candidates = data.inbox.filter((i) => i.decision !== "ignored");
     root.innerHTML = `
-      <div class="page-head"><div><h1>Monitored networks</h1>
+      <div class="page-head"><div><h1>Protected networks</h1>
         <p>A saved baseline tells GhostAP what your networks should look like, so it protects them from the first second of a capture and catches a twin that is already running when you start.</p>
         <div class="meta-line"><span class="mono">${esc(data.file)}</span><span>${data.updated_at ? "saved " + new Date(data.updated_at * 1000).toLocaleString() : "nothing saved yet"}</span>
         <span>${data.applies_live ? "changes apply to the running live capture immediately" : "used by live captures; for a replay start GhostAP with --monitored"}</span></div></div></div>
@@ -174,7 +174,7 @@
     title: "Protected networks",
     show(el) {
       root = el;
-      el.innerHTML = '<div class="card empty">Loading monitored networks…</div>';
+      el.innerHTML = '<div class="card empty">Loading protected networks…</div>';
       el.onclick = onClick;
       el.onchange = (e) => { if (e.target.id === "show-ignored") { showIgnored = e.target.checked; render(); } };
       el.onsubmit = (e) => {

@@ -8,14 +8,19 @@
 
   const show = (v, f) => (f.type === "json" ? JSON.stringify(v) : v === true ? "on" : v === false ? "off" : String(v ?? ""));
 
+  /** Weights and signatures use the same plain names as the rest of the dashboard. */
+  const nameOf = (f) => {
+    const m = /^(weights|signatures)\.(.+)$/.exec(f.key);
+    return m && G.IND[m[2]] ? G.IND[m[2]].label : f.label;
+  };
   function input(f, v) {
     const id = "set-" + f.key.replace(/\./g, "-"), cur = f.key in dirty ? dirty[f.key] : v.saved;
     const attrs = `id="${id}" data-key="${esc(f.key)}" aria-describedby="${id}-help"`;
-    if (f.type === "bool") return `<label class="switch-row"><input type="checkbox" ${attrs} ${cur ? "checked" : ""}> <span>${esc(f.label)}</span></label>`;
+    if (f.type === "bool") return `<label class="switch-row"><input type="checkbox" ${attrs} ${cur ? "checked" : ""}> <span>${esc(nameOf(f))}</span></label>`;
     const ctl = f.type === "select" ? `<select class="input" ${attrs}>${f.choices.map((c) => `<option ${c === cur ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`
       : f.type === "json" ? `<textarea class="input mono" rows="2" ${attrs}>${esc(JSON.stringify(cur))}</textarea>`
       : `<input class="input" ${attrs} type="${f.type === "number" ? "number" : "text"}" value="${esc(cur ?? "")}" ${f.min != null ? `min="${f.min}"` : ""} ${f.max != null ? `max="${f.max}"` : ""} ${f.step != null ? `step="${f.step}"` : ""}>`;
-    return `<label for="${id}">${esc(f.label)}</label>${ctl}`;
+    return `<label for="${id}">${esc(nameOf(f))}</label>${ctl}`;
   }
 
   function render() {

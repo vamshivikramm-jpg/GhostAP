@@ -37,10 +37,10 @@
           <td class="num">${m.latency_mean ? fmt(Number(m.latency_mean), 0) + " / " + fmt(Number(m.latency_max), 0) + " s" : "–"}</td></tr>`; }).join("")}
         </tbody></table></div>
         ${ext ? '<p class="muted small">95% intervals: W = Wilson, B = bootstrap over captures. Few captures make them wide; that is the real uncertainty.</p>' : ""}</section>
-      ${ext ? `<section class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+      ${ext ? `<section class="grid two">
         <div class="card"><h2>ROC <span class="muted">AUC ${fmt(ext.curves.auc, 2)}</span></h2><div id="ev-roc" class="chart"></div></div>
         <div class="card"><h2>Precision–recall <span class="muted">AP ${fmt(ext.curves.average_precision, 2)}</span></h2><div id="ev-pr" class="chart"></div></div></section>
-      <section class="grid" style="grid-template-columns:minmax(0,1fr) minmax(0,1fr)">
+      <section class="grid two">
         <div class="card"><h2>Tune / test split</h2>
           ${ext.split_results.usable ? `<p>Test captures only (${ext.split.test.length}, ${ext.split.test_twins} twins): configured threshold → F1 <b>${fmt(ext.split_results.test_configured.f1, 2)}</b>; threshold chosen on the tune captures (${ext.split_results.threshold_chosen_on_tune}) → F1 ${fmt(ext.split_results.test_tuned.f1, 2)}; name-only check → F1 ${fmt(ext.split_results.test_baseline.f1, 2)}.</p>
             <p class="muted small">Tune: ${esc(ext.split.tune.join(", "))}<br>Test: ${esc(ext.split.test.join(", "))}</p>` : '<p class="muted">Each half needs at least one evil twin: add more labelled captures.</p>'}</div>
