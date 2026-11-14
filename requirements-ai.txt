@@ -1,0 +1,2 @@
+# Optional: the AI explainer and "Ask GhostAP" (ai.enabled in config.yaml)
+anthropic>=1.0,<2

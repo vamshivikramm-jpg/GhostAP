@@ -72,6 +72,9 @@ DEFAULT_CONFIG: dict = {
         "jsonl": {"enabled": False, "path": "data/alerts.jsonl"},                                            # F059
     },
     "api": {"metrics": True},              # F060: Prometheus /metrics endpoint
+    # F086/F087: opt-in AI help through the Claude API (key in ANTHROPIC_API_KEY, never here)
+    "ai": {"enabled": False, "model": "claude-opus-5-5", "effort": "medium", "max_tokens": 16000,
+           "redact": True},
 }
 
 WEBHOOK_FORMATS = ("json", "ntfy", "telegram", "slack")
@@ -201,6 +204,10 @@ def validate(cfg: dict) -> dict:
     need(sl["format"] in ("json", "cef"), "notifications.syslog.format must be json or cef")
     need(1 <= sl["port"] <= 65535, "notifications.syslog.port must be 1-65535")
     need(not n["jsonl"]["enabled"] or bool(n["jsonl"]["path"]), "notifications.jsonl.path is empty")
+    ai = cfg["ai"]
+    need(ai["effort"] in ("low", "medium", "high", "xhigh", "max"), "ai.effort must be low, medium, high, xhigh or max")
+    need(1024 <= ai["max_tokens"] <= 64000, "ai.max_tokens must be between 1024 and 64000")
+    need(bool(ai["model"]), "ai.model is empty")
     if errors:
         raise ConfigError("; ".join(errors))
     cfg["temporal"]["smoothing_steps"] = int(t["smoothing_steps"])

@@ -136,8 +136,8 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F083 | Shareable views | D | done |
 | F084 | Learned weights | G | done* (runs on the synthetic set; meaningful only with Phase 2 captures) |
 | F085 | Anomaly model | G | done* (same: synthetic until Phase 2) |
-| F086 | AI alert explainer (opt-in) | I | todo |
-| F087 | Ask GhostAP (opt-in) | I | todo |
+| F086 | AI alert explainer (opt-in) | I | done* (off by default; tested with a fake client; real use needs your ANTHROPIC_API_KEY) |
+| F087 | Ask GhostAP (opt-in) | I | done* (same) |
 | F088 | Labelling assistant | G | done |
 | F089 | Demo button | D | done |
 | F090 | Presentation mode | D | done |

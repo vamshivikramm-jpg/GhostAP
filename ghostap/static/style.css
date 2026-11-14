@@ -621,3 +621,10 @@ body.role-viewer [data-trust], body.role-viewer .checklist input { display: none
 .save-bar { position: sticky; bottom: 12px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; padding: 10px 14px;
   border-radius: 12px; background: var(--surface); border: 1px solid var(--accent); box-shadow: 0 8px 24px rgba(0, 0, 0, .18); z-index: 20; }
 .save-bar span { margin-right: auto; font-weight: 600; }
+
+/* F086/F087 AI help */
+.ai-box { margin-top: 12px; padding: 12px 14px; border: 1px dashed var(--accent); border-radius: 10px; background: var(--accent-soft); }
+.ai-box p { margin: 6px 0; }
+.ask-log { display: grid; gap: 8px; }
+.ask-log .q { font-weight: 500; }
+.ask-log .a { padding: 8px 12px; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 6px; }

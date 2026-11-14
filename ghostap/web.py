@@ -459,6 +459,19 @@ def create_app(db: str, config: Optional[dict] = None,
     from . import web_settings
     web_settings.register(app, ctx)
 
+    def ap_facts_for(ssid, bssids):
+        with store() as s:
+            b_end = baseline_end(s)
+            return [ap_facts(s, p, b_end) for p in s.profiles() if p["ssid"] == ssid and p["bssid"] in bssids]
+
+    def ap_rows_now():
+        with store() as s:
+            return ap_rows(s)
+    ctx.ap_facts_for, ctx.ap_rows_now = ap_facts_for, ap_rows_now
+    ctx.summary_dict = lambda: app.view_functions["summary"]().get_json()
+    from . import web_ai
+    web_ai.register(app, ctx)
+
     @app.get("/api/timeline")
     def timeline():
         """Risk lines for the timeline chart (F038: bounded for large sites).

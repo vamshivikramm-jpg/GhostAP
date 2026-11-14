@@ -82,3 +82,13 @@ notifications:
 # Prometheus / Grafana: GET /metrics (needs an API key when the dashboard is exposed).
 api:
   metrics: true
+
+# Opt-in AI help (alert explainer, "Ask GhostAP") through the Claude API. Off by default.
+# Needs: pip install -r requirements-ai.txt, and ANTHROPIC_API_KEY in the environment.
+# With redact: true, network names and addresses are replaced before anything is sent.
+ai:
+  enabled: false
+  model: claude-opus-5-5
+  effort: medium
+  max_tokens: 16000
+  redact: true
