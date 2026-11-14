@@ -7,6 +7,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 import threading
@@ -15,6 +16,8 @@ from typing import Callable, List, Optional
 
 from .parser import parse_event, parse_frame
 from .storage import Store
+
+log = logging.getLogger("ghostap.collector")
 
 LIVE_HELP = """\
 [!] Live capture failed: {err}
@@ -122,14 +125,37 @@ def collect_live(iface: str, duration: Optional[float], store: Store,
     start = time.time()
     sock = None
     try:
-        sock = _listen(iface)
+        sock = _listen(iface)                          # a failure here is reported to the caller
         while not (stop is not None and stop.is_set()):
             if duration and time.time() - start >= duration:
                 break
+            if getattr(sock, "closed", False):
+                # scapy closes a socket whose interface went down (driver reset, USB glitch, monitor
+                # mode switched off and on): keep trying to reopen it instead of ending the capture
+                try:
+                    sock = _listen(iface)
+                    log.warning("capture resumed on %s", iface)
+                    if on_status:
+                        on_status("capture resumed on {}".format(iface))
+                except OSError as e:
+                    if on_status:
+                        on_status("capture interrupted on {} ({}); retrying".format(iface, e))
+                    (stop.wait if stop is not None else time.sleep)(1.0)
+                    continue
             chunk = 1.0 if not duration else max(0.1, min(1.0, duration - (time.time() - start)))
             # the socket stays open between calls: scapy closes only sockets it opened itself
-            sniff(opened_socket=sock, prn=handle, lfilter=_is_beacon_or_probe_resp,
-                  store=False, timeout=chunk)
+            try:
+                sniff(opened_socket=sock, prn=handle, lfilter=_is_beacon_or_probe_resp,
+                      store=False, timeout=chunk)
+            except OSError as e:
+                log.warning("capture interrupted on %s: %s", iface, e)
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                sock.closed = True
+            if getattr(sock, "closed", False):
+                log.warning("capture interrupted on %s (interface down?); reopening", iface)
             store.commit()
             if control is not None:
                 hopper = control.hopper                  # may have been started from the dashboard

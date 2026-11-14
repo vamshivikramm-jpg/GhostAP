@@ -215,6 +215,17 @@ before and after.
   after a hop); harmless for detection, documented in HARDWARE.md.
 - `tools/kali_monitor.sh stop` now restores Wi-Fi by itself (wpa_supplicant restarted).
 
+### Soak test (release 2.1, same day)
+
+A 4-hour soak (2.4 + 5 GHz hopping, default 30-minute memory limit) ran for **98 valid minutes**:
+CPU about 13 % of one core, 12 threads, about 29 open files, 1,500–1,900 frames per minute, no kernel
+log noise. Memory grew 2.5 MB/min until the memory limit took effect (about 40 min), then
+**about 0.65 MB/min** (175 → 207 MB over minutes 40–90): a slow growth that still needs to be found.
+The soak ended early through an operator error during testing (the interface was taken down), which
+exposed a regression of the one-socket change: scapy closes the socket when the interface goes down and
+capture stopped for good. **Fixed:** the collector now reopens the socket and continues (verified live:
+interface down for 3 s, capture resumed about 3 s later).
+
 ## 8. Performance (measured live)
 
 60-second sample in run3 (about 10 minutes in, about 40 networks, hotspot on):

@@ -205,6 +205,47 @@ def test_collector_cli_rejects_bad_hop(capsys):
 
 # ------------------------------------------------------------ labelling tool
 
+def test_live_capture_survives_the_interface_going_down(capture, tmp_path, monkeypatch):
+    """Live (soak test): the interface went down for a moment, scapy closed the capture socket
+    ('Network is down') and the capture ended for good. It must reopen and continue."""
+    from scapy.utils import rdpcap
+    pkts = rdpcap(capture[0])[:30]
+    opens = {"n": 0}
+    calls = {"n": 0}
+
+    class Sock:
+        def __init__(self, iface):
+            opens["n"] += 1
+            if opens["n"] == 2:                       # first reopen: the interface is still down
+                raise OSError(100, "Network is down")
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def fake_sniff(prn, lfilter, store, timeout, opened_socket=None, iface=None):
+        calls["n"] += 1
+        assert not opened_socket.closed
+        part = pkts[:15] if calls["n"] == 1 else pkts[15:] if calls["n"] == 2 else []
+        for p in part:
+            if lfilter(p):
+                prn(p)
+        if calls["n"] == 1:
+            opened_socket.close()                     # what scapy does on '[Errno 100] Network is down'
+        if calls["n"] == 3:
+            stop.set()
+
+    import scapy.sendrecv
+    monkeypatch.setattr(scapy.sendrecv, "sniff", fake_sniff)
+    monkeypatch.setattr("ghostap.collector._listen", Sock)
+    stop = threading.Event()
+    status = []
+    with Store(str(tmp_path / "x.db")) as s:
+        n = collect_live("wlan1", None, s, stop=stop, on_status=status.append)
+    assert n == 30 and opens["n"] == 3                  # opened, one failed reopen, reopened
+    assert any("interrupted" in m for m in status) and any("resumed" in m for m in status)
+
+
 def test_label_capture_roundtrip(capture, tmp_path, capsys):
     import json
     import shutil

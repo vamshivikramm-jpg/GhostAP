@@ -330,6 +330,7 @@ This returns the adapter to normal (managed) mode and restarts NetworkManager.
 ## Command cheat-sheet
 
 ```bash
+ghostap                                              # all of the below in one word (tools/ghostap.sh)
 sudo tools/kali_monitor.sh check                     # which adapter, supports monitor mode?
 sudo tools/kali_monitor.sh start wlan1               # monitor mode
 sudo .venv/bin/python -m ghostap.web --iface wlan1 --hop 1,6,11 --save-pcap data/lab/run1.pcap

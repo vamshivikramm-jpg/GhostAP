@@ -72,7 +72,7 @@ tools/                   make_test_pcap, make_eval_set (11 scenarios), build_sce
                          demo, sync_numbers, bench_large_site, screenshot_dashboard, kali_monitor.sh,
                          install_service.sh
 deploy/, Dockerfile, docker-compose.yml          systemd unit, container (not built here)
-tests/                   pytest (269 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
+tests/                   pytest (270 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
                          pip-audit, tests, evaluation smoke test, sync_numbers check)
 ```
 
@@ -137,7 +137,10 @@ python -m ghostap.apikeys create --name X --scope read
 - Tests never touch the real `data/` or `~/.config`: conftest sets a temp signing key and checks that the
   real data/admin.db schema is unchanged. Tests that run a CLI or `web.main` pass their own config.
 - Live capture keeps one socket open for the whole run (`collector._listen`, `sniff(opened_socket=…)`);
-  reopening it per call spammed the kernel log and dropped frames. Tests patch `_listen`.
+  reopening it per call spammed the kernel log and dropped frames. Tests patch `_listen`. If the interface
+  goes down, scapy closes the socket: the collector reopens it and continues (never end the capture).
+- `tools/ghostap.sh` (installed as `ghostap`): one-word start + browser; `stop` never releases an adapter
+  another GhostAP capture still uses. Open item: ~0.65 MB/min memory growth after the memory limit (soak).
 - Live detector memory is capped by `retention.memory_minutes` (prunes the Analyzer only;
   `tests/test_memory_bound.py` checks scores are identical). Indicators may only look at the
   scoring window, each AP's first `Analyzer.HEAD` frames and TSF resets.

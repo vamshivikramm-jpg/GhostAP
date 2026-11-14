@@ -59,6 +59,17 @@ tests/                         pytest suite
 data/, results/                captures, databases, evaluation output (gitignored)
 ```
 
+## One-word start (`ghostap`)
+
+```bash
+sudo ln -sf "$PWD/tools/ghostap.sh" /usr/local/bin/ghostap   # once
+ghostap            # live capture on wlan0, browser opens when the dashboard is ready; Ctrl-C = stop + Wi-Fi back
+ghostap demo       # synthetic demo, no adapter needed
+ghostap view       # browse the latest recorded session
+ghostap open       # open the dashboard of a running GhostAP
+ghostap stop       # stop it (the adapter is only released when no other capture uses it)
+```
+
 ## Quick demo
 
 ```bash
