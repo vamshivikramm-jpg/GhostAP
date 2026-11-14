@@ -12,6 +12,8 @@
 >   Kismet comparison done (Kismet 2/3 twins, GhostAP 3/3, both 0 false alarms; reader confirmed on real
 >   logs). 2.0 Phase 2 baseline integrity done (signed, versioned, approval-gated, contamination checks).
 >   Still to do in 2.1: multi-hour soak (running), a 5 GHz run with a twin (needs the owner).
+> - **2.2 (in progress):** O18 hardware capability intelligence done (`ghostap/hwcaps.py`, System page).
+>   Next: 2.0 Phase 3 (persisted incidents, evidence records, hash-chained audit).
 
 Research and planning only. Nothing in the repository, the database, the dependencies, the
 wireless interface or Git was changed while preparing this plan (14 Nov 2026, `main` at `c736bb5`,

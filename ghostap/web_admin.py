@@ -65,6 +65,16 @@ def register(app, ctx) -> None:
         return jsonify({"deleted": sid})
 
     # ---------------------------------------------------------------- health
+    @app.get("/api/sensor/capabilities")
+    def sensor_capabilities():
+        """PLAN_3.0 O18: what the capture adapter can and cannot observe (read-only `iw phy`)."""
+        from . import hwcaps
+        st = ctx.status()
+        if st.get("mode") != "live" or not st.get("source"):
+            return jsonify({"available": False, "reason": "No live capture: this session comes from a file, "
+                                                          "so there is no adapter to describe"})
+        return jsonify(hwcaps.cached(st["source"]))
+
     @app.get("/api/health")
     def health():
         st = ctx.status()

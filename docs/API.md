@@ -52,6 +52,7 @@ Add `?session=<id>` to a GET to read a past session (ids from `GET /api/sessions
 | `GET /api/timeline?top=30&points=800` | risk lines (bounded for large sites) |
 | `POST /api/alerts/<id>/triage` | `{"status": "new|investigating|confirmed|false_positive", "note": "…"}` |
 | `GET /metrics` | Prometheus metrics |
+| `GET /api/sensor/capabilities` | the live adapter's bands, Wi-Fi generations, antennas, ciphers, and what it cannot observe |
 | `GET /api/baselines/versions` | saved-baseline versions, pending changes and whether you may approve them |
 | `GET /api/baselines/versions/<id>` | one version or proposal, with its content and a diff against the current baseline |
 | `POST /api/baselines/versions/<id>/approve` · `/reject` · `/rollback` | admin only, body `{}` (reject: `{"reason": "…"}`) |

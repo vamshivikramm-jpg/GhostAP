@@ -13,12 +13,32 @@
       <span class="tile-value" style="font-size:22px">${esc(value)}</span><span class="tile-sub">${esc(sub || "")}</span></div>`;
   }
 
+  function capsCard(c) {
+    if (!c) return "";
+    if (!c.available) return `<section class="card"><div class="card-head"><h2>Sensor capabilities</h2></div><p class="empty">${esc(c.reason || c.error || "Not available.")}</p></section>`;
+    const bands = Object.entries(c.bands || {}).map(([b, ch]) => `${b} GHz (${ch.length} channels)`).join(", ") || "none";
+    const yes = (v) => (v ? "yes" : "no");
+    return `<section class="card"><div class="card-head"><h2>Sensor capabilities</h2><span class="muted mono">${esc(c.iface)} · ${esc(c.driver || "?")} · USB ${esc(c.usb_id || "?")}</span></div>
+      <p class="hint">Read from the adapter (<span class="mono">iw phy ${esc(c.phy)} info</span>). What a sensor cannot hear is a blind spot, not a quiet airspace.</p>
+      <section class="grid two"><div><table><tbody>
+        <tr><td>Bands</td><td>${esc(bands)}</td></tr>
+        <tr><td>Monitor mode</td><td>${yes((c.modes || []).includes("monitor"))}</td></tr>
+        <tr><td>Wi-Fi 4 / 5 / 6 / 7</td><td>${[c.ht, c.vht, c.he, c.eht].map(yes).join(" / ")}</td></tr>
+        <tr><td>Receive antennas</td><td>${esc(String(c.antennas_rx ?? "?"))}</td></tr>
+        <tr><td>Concurrent interfaces</td><td>${c.combinations === false ? "no" : c.combinations ? "yes" : "unknown"}</td></tr>
+        <tr><td>WPA3-Personal (SAE) client</td><td>${yes(c.sae)}</td></tr>
+        <tr><td>Ciphers</td><td>${esc((c.ciphers || []).join(", "))}</td></tr></tbody></table></div>
+        <div><h3>This sensor cannot</h3>${(c.limits || []).length ? `<ul class="list-plain">${c.limits.map((l) => `<li><span><b>${esc(l.what)}</b> <span class="muted">${esc(l.why)}</span></span></li>`).join("")}</ul>` : '<p class="empty">No known limitations.</p>'}</div>
+      </section></section>`;
+  }
+
   async function load() {
-    let h, q, a;
+    let h, q, a, caps = null;
     try {
-      [h, q, a] = await Promise.all([get("/api/health"), get("/api/quality"),
+      [h, q, a, caps] = await Promise.all([get("/api/health"), get("/api/quality"),
         // analysts and admins only: a viewer gets 403 and simply sees no audit log
-        get("/api/audit?limit=100" + (auditFilter ? "&action=" + encodeURIComponent(auditFilter) : "")).catch((e) => (e.status === 403 ? null : Promise.reject(e)))]);
+        get("/api/audit?limit=100" + (auditFilter ? "&action=" + encodeURIComponent(auditFilter) : "")).catch((e) => (e.status === 403 ? null : Promise.reject(e))),
+        get("/api/sensor/capabilities").catch(() => null)]);
     } catch (e) {
       main.innerHTML = `<div class="card empty">Could not load system information (${esc(e.message)}).</div>`;
       return;
@@ -58,6 +78,7 @@
             <td class="num">${x.heard_ratio == null ? "–" : fmt(x.heard_ratio * 100, 0) + "%"}</td></tr>`).join("")}</tbody></table></div>
         </div>
       </section>
+      ${capsCard(caps)}
       <section class="card"><div class="card-head"><h2>Audit log</h2>
         <select class="input" id="audit-filter" aria-label="Filter by action"><option value="">All actions</option>${actions.concat(auditFilter && !actions.includes(auditFilter) ? [auditFilter] : []).map((x) => `<option ${x === auditFilter ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></div>
         ${a.length ? `<div class="table-wrap"><table><thead><tr><th>When</th><th>Who</th><th>Action</th><th>What</th><th>Details</th></tr></thead>
