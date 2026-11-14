@@ -52,7 +52,7 @@ DEFAULT_CONFIG: dict = {
         "beacon_rate_tolerance": 0.5,      # F008: flag beaconing > (1 + this) x advertised rate
         "clock_skew_tolerance_ppm": 10.0,  # F007: clock drift change that counts
         "deauth_window_seconds": 10.0,     # F005
-        "deauth_medium": 10,               #   frames per window for MEDIUM
+        "deauth_medium": 10,               #   frames per window for MEDIUM (reasons 3/8 count 1/3)
         "deauth_high": 30,                 #   ... and for HIGH
         "flood_new_aps_per_minute": 30,    # F008: many new radios at once = beacon flood
         "use_example_signatures": False,   # enable the synthetic example tool signatures

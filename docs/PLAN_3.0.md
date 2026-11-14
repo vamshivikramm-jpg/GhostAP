@@ -6,8 +6,9 @@
 > adapter is recommended, needed from 3.1); approval rule configurable, admin-only by default and
 > two-person when ≥ 2 admins exist. Not answered yet: an OpenWrt router or hostapd AP the owner controls
 > (the hwsim lab's hostapd covers the demos meanwhile).
-> - **2.1 (in progress):** deauth reason classes and the channel-flip sequence rule (approved live-test decisions);
->   the look-alike dual-band case waits for O2 (declared topology, 3.0).
+> - **2.1 (in progress):** done: deauth reason classes (leave reasons 3/8 count one third) and the channel-flip
+>   sequence rule. The look-alike dual-band case waits for O2 (declared topology, 3.0). Still to do in 2.1:
+>   persistent capture socket (L2), 5 GHz live run, multi-hour soak, Kismet comparison, 2.0 Phase 2.
 
 Research and planning only. Nothing in the repository, the database, the dependencies, the
 wireless interface or Git was changed while preparing this plan (14 Nov 2026, `main` at `c736bb5`,

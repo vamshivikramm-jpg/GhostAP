@@ -567,6 +567,22 @@ def _signal_tracks(obs: Sequence[dict], gap_db: float):
     return sum(low) / len(low), sum(high) / len(high), switches
 
 
+SEQ_CONTINUOUS = 256     # a forward step this small across a channel flip = the same radio's counter
+
+
+def _one_counter(flips) -> bool:
+    """Every channel flip continues one sequence counter (small forward step), so one radio sent
+    both channels' frames: automatic channel selection or a stale channel field in probe
+    responses, not a clone (seen live on a neighbour's router). A clone has its own counter;
+    the chance that it looks continuous at every flip is about (256/4096)^flips."""
+    for a, b in flips:
+        if a.get("seq") is None or b.get("seq") is None:
+            return False
+        if not 0 < (b["seq"] - a["seq"]) % SEQ_MOD < SEQ_CONTINUOUS:
+            return False
+    return True
+
+
 def bssid_conflict(ap: APStats, base: Optional[SSIDBaseline], siblings,
                    window: float = 5.0, gap_db: float = 12.0) -> IndicatorResult:
     """Same BSSID on two channels at once, or its sequence numbers jump backwards."""
@@ -578,7 +594,7 @@ def bssid_conflict(ap: APStats, base: Optional[SSIDBaseline], siblings,
     chan_obs = [o for o in obs if o.get("channel") is not None]
     flips = [(a, b) for a, b in zip(chan_obs, chan_obs[1:])
              if a["channel"] != b["channel"] and b["ts"] - a["ts"] <= window]
-    if len(flips) >= 2:
+    if len(flips) >= 2 and not _one_counter(flips):
         chans = sorted({o["channel"] for pair in flips for o in pair})
         return IndicatorResult(
             name, 1.0,

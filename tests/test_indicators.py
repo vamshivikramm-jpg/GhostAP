@@ -117,7 +117,9 @@ def test_tsf_reset_detected():
 
 def test_same_bssid_two_channels():
     o = [obs(t, ch=6) for t in range(100)]
-    o += [obs(t + 0.5, ch=11) for t in range(60, 100)]   # clone beaconing alongside
+    # clone beaconing alongside, with its own sequence counter (one shared counter would mean
+    # one radio: see test_channel_flips_with_one_sequence_counter_are_not_a_clone)
+    o += [obs(t + 0.5, ch=11, seq=2000 + t) for t in range(60, 100)]
     r = run(o)["bssid_conflict"]
     assert r.value == 1.0 and "channels" in r.reason
 

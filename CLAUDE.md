@@ -69,7 +69,7 @@ tools/                   make_test_pcap, make_eval_set (11 scenarios), build_sce
                          demo, sync_numbers, bench_large_site, screenshot_dashboard, kali_monitor.sh,
                          install_service.sh
 deploy/, Dockerfile, docker-compose.yml          systemd unit, container (not built here)
-tests/                   pytest (247 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
+tests/                   pytest (251 tests); CI: .github/workflows/tests.yml (Py 3.11-3.13: ruff,
                          pip-audit, tests, evaluation smoke test, sync_numbers check)
 ```
 
@@ -109,6 +109,8 @@ python -m ghostap.apikeys create --name X --scope read
 - bssid_conflict's signal-track check (F006) uses only frames heard on or within two
   channels (2.4 GHz) of the AP's own channel (`_heard_on_channel`): a hopping sensor hears
   a strong AP faintly on far channels.
+  Its channel-flip rule ignores flips whose sequence counter continues (`_one_counter`): one radio.
+- DeauthDetector: leave reasons (3, 8) count one third towards the burst thresholds (`LEAVE_WEIGHT`).
 - Unit of evaluation = one (SSID, BSSID) per capture.
 
 ## Conventions

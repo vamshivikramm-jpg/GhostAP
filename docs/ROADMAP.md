@@ -56,8 +56,8 @@ simulated input; needs real hardware, credentials or Phase 2 data to confirm).
 | F002 | Look-alike network names | B | done |
 | F003 | Attack-tool fingerprint library | B | done* |
 | F004 | Detailed security downgrade | B | done |
-| F005 | Deauthentication flood detection | B | done (live: real deauth bursts seen and explained by reason code) |
-| F006 | Two transmitters, one address | B | done (live fix: compares only frames heard on the AP's own channel) |
+| F005 | Deauthentication flood detection | B | done (live: real deauth bursts seen and explained by reason code; leave reasons 3/8 count one third since 2.1) |
+| F006 | Two transmitters, one address | B | done (live fixes: compares only frames heard on the AP's own channel; channel flips with one continuous sequence counter are one radio) |
 | F007 | Beacon clock-skew fingerprint | B | done* (live: measured between APs since 14 Nov 2026; a cloned-BSSID twin not yet tested live) |
 | F008 | Beacon-rate anomaly | B | done |
 | F009 | Wi-Fi 6 / 6E awareness | B | done* |

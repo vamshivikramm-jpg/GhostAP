@@ -356,6 +356,11 @@ DEAUTH_REASONS = {
 # codes that mean "a device failed to log in", e.g. it tried a saved password on a network
 # that has the same name but a different password (seen live with a same-name phone hotspot)
 LOGIN_FAILURE_REASONS = {15, 16, 23}
+# "station is leaving": sent when a device leaves normally. A burst of them is common (one device
+# repeating its goodbye, seen live: 11 frames in 1 s), so each counts one third towards the
+# burst thresholds. Floods (hundreds of frames) still alert even if they fake this reason.
+LEAVE_REASONS = {3, 8}
+LEAVE_WEIGHT = 1 / 3
 LOGIN_FAILURE_CAUSE = ("Devices failing to log in: e.g. phones or laptops trying their saved password "
                        "on a network with the same name but a different password (such as a twin)")
 
@@ -377,7 +382,7 @@ class DeauthDetector:
             q.append(e)
             while q and q[0]["ts"] < e["ts"] - self.window:
                 q.popleft()
-            n = len(q)
+            n = sum(LEAVE_WEIGHT if x.get("reason") in LEAVE_REASONS else 1.0 for x in q)
             if n < self.medium:
                 continue
             level = HIGH if n >= self.high else MEDIUM
@@ -394,7 +399,7 @@ class DeauthDetector:
             if _LEVEL_ORDER[level] > _LEVEL_ORDER[st["level"]]:
                 st["level"] = level
             if n > st["peak"]:
-                st["peak"], st["peak_ts"] = n, e["ts"]
+                st["peak"], st["peak_ts"], st["peak_frames"] = n, e["ts"], len(q)
 
     def alerts(self, names_of=lambda b: []) -> List[dict]:
         out = []
@@ -402,7 +407,7 @@ class DeauthDetector:
             names = names_of(bssid)
             reason = ("{} deauthentication/disassociation frames within {:g} s against this AP "
                       "(peak), {:.0%} sent to everyone; often used to push clients onto an evil twin").format(
-                st["peak"], self.window, st["broadcast"] / max(1, st["frames"]))
+                st.get("peak_frames", round(st["peak"])), self.window, st["broadcast"] / max(1, st["frames"]))
             benign = list(BENIGN_CAUSES["deauth_flood"])
             if st["reasons"]:
                 code, n = max(st["reasons"].items(), key=lambda kv: (kv[1], -kv[0]))

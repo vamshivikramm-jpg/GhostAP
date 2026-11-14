@@ -579,7 +579,7 @@ exactly like the synthetic set (one SSID and BSSID per capture is one unit):
 | Duplicate-SSID baseline (live) | 3 | 2 | 139 | 0 | 0.60 | 1.00 | 0.75 | 0.01 | 0 s |
 
 The twins' peak scores were 38.1 and 31.5 for the two WPA2 twins and 59.2 for the open
-twin. The legitimate access points' peak scores averaged 2.7 (highest 19.4). The router's own peak
+twin. The legitimate access points' peak scores averaged 2.4 (highest 16.0). The router's own peak
 scores were 0.0, 11.0 and 0.3 in the three runs, well below the threshold, while the
 duplicate-SSID baseline flagged it as soon as a twin appeared.
 
@@ -617,7 +617,7 @@ duplicate-SSID baseline flagged it as soon as a twin appeared.
   only for frames received on or next to the access point's own channel.
 
 With the code from before these fixes, the verdicts on the three captures were the same,
-but legitimate access points averaged 8.5 instead of 2.7. The WPA2 twins' scores were
+but legitimate access points averaged 8.5 instead of 2.4. The WPA2 twins' scores were
 inflated by the same false evidence. The synthetic results in Section 6 are unchanged by
 the fixes.
 

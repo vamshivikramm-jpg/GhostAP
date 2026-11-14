@@ -87,7 +87,7 @@ itself as HIGH 100 every time a twin appeared, which is why GhostAP does not rel
 | Baseline (duplicate SSID) | 3 | 2 | 139 | 0 | 0.60 | 1.00 | 0.75 | 0.01 | 0 s |
 
 Twin peak scores: 38.1 (run2 WPA2), 31.5 (run3 WPA2), 59.2 (run3 open). Legitimate APs:
-mean peak 2.7, highest 19.4. Same recordings with the code from before the fixes: the same
+mean peak 2.4, highest 16.0 (after the 2.1 channel-flip fix below; 2.7 / 19.4 before it). Same recordings with the code from before the fixes: the same
 verdicts, but legitimate APs' mean peak was 8.5 (highest 23.6) and the WPA2 twins scored
 50.0 and 36.5, partly from false evidence. The threshold sweep prefers 20 on these 3
 captures; the configured 30 is kept (thresholds are not tuned on reporting data).
@@ -167,14 +167,17 @@ before and after.
    scores as optimistic for this attack.
 3. **Channel-flip rule (bssid_conflict) on a neighbour:** probe responses from one radio carried
    channel 7/8 while its beacons said 4. The sequence numbers were continuous, so it was one
-   device (most likely automatic channel selection or a stale channel field). Suggested refinement:
-   do not call it a clone when the sequence counter is continuous across the flip.
+   device (most likely automatic channel selection or a stale channel field). **Fixed in 2.1:**
+   channel flips whose sequence counter continues across every flip (forward step < 256) are one
+   radio, not a clone (`_one_counter`); that neighbour's peak fell from 19.4 to 3.2.
 4. **Look-alike names:** "X" and "X_5G" from one router (BSSIDs differing in the last digit)
    flag each other (floor 16). Exempting near-identical BSSIDs would also let an attacker evade
    the check, so it needs a design decision.
 5. **Deauth threshold:** one benign burst of 11 "station is leaving" (reason 8) frames to a
-   neighbour's AP raised a MEDIUM deauth alert. Consider treating leave reasons (3, 8) differently
-   from forced ones (6, 7); not changed without more data.
+   neighbour's AP raised a MEDIUM deauth alert. **Fixed in 2.1:** leave reasons (3, 8) count one
+   third towards the burst thresholds (a flood of 200 faked-reason-3 frames still raises HIGH).
+   Replayed over the live events: the twin's reason-15 alert remains; the benign reason-8 burst and
+   the router's reason-3 departures (clients leaving it for the twin) no longer alert.
 6. **Signal statistics include off-channel frames** (e.g. the router: average −29 dBm, minimum
    −84 dBm while hopping). rssi_jump still worked; using on-channel frames there too would
    make it more sensitive.

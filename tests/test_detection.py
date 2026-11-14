@@ -215,6 +215,27 @@ def test_two_transmitters_are_still_found_while_hopping():
     assert r.value == 1.0 and "two signal levels" in r.reason
 
 
+def test_channel_flips_with_one_sequence_counter_are_not_a_clone():
+    """Live: a neighbour's probe responses said channel 7/8 while its beacons said 4, but the
+    sequence counter ran on across every flip (811 -> 812, 981 -> 982): one radio."""
+    o = []
+    for i in range(300):
+        ch = 8 if i % 10 == 5 else 4                      # every 10th frame claims channel 8
+        o.append(obs(i / 10, ch=ch, seq=(100 + i * 3) % 4096))
+    r = by_name(Analyzer(o, 0.1).evaluate("Lab", LEGIT, until=1030, window=10))["bssid_conflict"]
+    assert r.value == 0, r.reason
+
+
+def test_cloned_bssid_on_another_channel_is_still_a_clone():
+    o = []
+    for i in range(300):
+        o.append(obs(i / 10, ch=4, seq=(100 + i * 3) % 4096))
+        if i % 10 == 5:                                    # a clone with its own counter on 8
+            o.append(obs(i / 10 + 0.05, ch=8, seq=(3000 + i) % 4096))
+    r = by_name(Analyzer(o, 0.1).evaluate("Lab", LEGIT, until=1030, window=10))["bssid_conflict"]
+    assert r.value == 1.0 and "alternates between channels" in r.reason
+
+
 def test_on_channel_rule():
     from ghostap.indicators import _heard_on_channel
     assert _heard_on_channel({"channel": 2, "freq": 2412})          # tuned 1: overlaps channel 2
@@ -344,7 +365,7 @@ def test_deauth_alert_names_the_reason_code_and_login_failures():
     handshake (reason 15) again and again. The alert keeps its score and level but says so."""
     det = DeauthDetector({"deauth_window_seconds": 10, "deauth_medium": 10, "deauth_high": 30})
     det.update([{"ts": 100 + i * 0.5, "kind": "deauth", "bssid": LEGIT, "broadcast": False,
-                 "reason": 15 if i % 4 else 3} for i in range(16)])
+                 "reason": 15 if i % 4 else 7} for i in range(16)])
     a = det.alerts()[0]
     assert a["level"] == "MEDIUM"
     assert "reason code 15 (4-way handshake timeout" in a["reasons"]
@@ -355,6 +376,23 @@ def test_deauth_alert_names_the_reason_code_and_login_failures():
     b = det2.alerts()[0]
     assert b["score"] == a["score"] and "reason code 7" in b["reasons"]
     assert not b["benign_causes"][0].startswith("Devices failing")
+
+
+def test_leave_reason_burst_is_not_an_attack():
+    """Live: one device repeated 'station is leaving' (reason 8) 11 times in 1 s to a
+    neighbour's AP and raised a MEDIUM alert. Leave reasons count one third."""
+    det = DeauthDetector({"deauth_window_seconds": 10, "deauth_medium": 10, "deauth_high": 30})
+    det.update([{"ts": 100 + i * 0.09, "kind": "disassoc", "bssid": LEGIT, "broadcast": False, "reason": 8}
+                for i in range(11)])
+    assert det.alerts() == []
+
+
+def test_flood_with_a_faked_leave_reason_still_alerts():
+    det = DeauthDetector({"deauth_window_seconds": 10, "deauth_medium": 10, "deauth_high": 30})
+    det.update([{"ts": 100 + i * 0.02, "kind": "deauth", "bssid": LEGIT, "broadcast": True, "reason": 3}
+                for i in range(200)])
+    a = det.alerts()[0]
+    assert a["level"] == "HIGH" and a["reasons"].startswith("deauth_flood (+80): 200 deauthentication")
 
 
 def test_deauth_detector_levels():
